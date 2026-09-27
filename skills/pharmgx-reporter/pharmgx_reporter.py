@@ -192,7 +192,7 @@ GENE_DEFS = {
         "phenotypes": {
             "Normal Metabolizer":       ["Normal/Normal"],
             "Intermediate Metabolizer": ["Normal/*2A", "Normal/*13", "Normal/D949V"],
-            "Poor Metabolizer":         ["*2A/*2A", "*2A/*13", "*13/*13"],
+            "Poor Metabolizer":         ["*2A/*2A", "*2A/*13", "*13/*13", "*2A/D949V", "*13/D949V"],
         },
     },
     "TPMT": {
@@ -1169,10 +1169,15 @@ def call_diplotype(gene, pgx_snps):
             if len(tested) == len(gene_rsids):
                 return "Normal/Normal"
             return f"Normal/Normal ({len(tested)}/{len(gene_rsids)} SNPs tested)"
-        v = detected[0]
-        if v["copies"] == 2:
-            return f"{v['allele']}/{v['allele']}"
-        return f"Normal/{v['allele']}"
+        # CPIC: "If two different decreased/no function variants are present,
+        # they are presumed to be on different gene copies."
+        alleles = [v["allele"] for v in detected for _ in range(v["copies"])]
+        if len(alleles) > 2:
+            desc = " + ".join(f"{v['allele']}({v['rsid']})" for v in detected)
+            return f"Indeterminate (more than two DPYD variant alleles: {desc})"
+        if len(alleles) == 1:
+            return f"Normal/{alleles[0]}"
+        return "/".join(alleles)
 
     if not detected:
         if len(tested) == len(gene_rsids):

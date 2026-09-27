@@ -12,6 +12,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pharmgx_reporter import (
@@ -845,3 +847,46 @@ def test_unknown_build_still_forces_indeterminate_end_to_end(tmp_path):
     )
     combined = (result.stdout + result.stderr).lower()
     assert "unknown_build" in combined
+
+
+def test_confident_phenotype_accounts_for_every_detected_allele():
+    """Exhaustive check that no detected allele is silently dropped.
+
+    For every star-allele/DPYD gene and every fully genotyped input with at most
+    two alt copies in total, a non-Indeterminate phenotype must come from a
+    diplotype that names every detected allele. Regression: DPYD *2A + *13
+    compound hets were reported as Normal/*2A (Intermediate).
+    """
+    from itertools import product
+
+    failures = []
+    for gene, gdef in GENE_DEFS.items():
+        if gdef.get("type") in ("genotype", "mthfr"):
+            continue
+        variants = list(gdef["variants"].items())
+        for copies in product((0, 1, 2), repeat=len(variants)):
+            if sum(copies) > 2:
+                continue
+            pgx = {rsid: {"genotype": vdef["alt"] * n + "N" * (2 - n)}
+                   for (rsid, vdef), n in zip(variants, copies)}
+            diplotype = call_diplotype(gene, pgx)
+            phenotype = call_phenotype(gene, diplotype)
+            if phenotype.startswith(("Indeterminate", "Unknown")):
+                continue
+            called = set(diplotype.split(" (")[0].split("/"))
+            detected = {vdef["allele"] for (_, vdef), n in zip(variants, copies) if n}
+            if not detected <= called:
+                failures.append((gene, copies, diplotype, phenotype))
+    assert not failures, failures
+
+
+@pytest.mark.parametrize("rsids", [
+    ("rs3918290", "rs55886062"),   # *2A + *13
+    ("rs3918290", "rs67376798"),   # *2A + D949V
+    ("rs55886062", "rs67376798"),  # *13 + D949V
+])
+def test_dpyd_compound_heterozygote_is_poor_metabolizer(rsids):
+    """CPIC presumes two different DPYD variants lie on different gene copies."""
+    variants = GENE_DEFS["DPYD"]["variants"]
+    pgx = {r: {"genotype": (v["alt"] + "N") if r in rsids else "NN"} for r, v in variants.items()}
+    assert call_phenotype("DPYD", call_diplotype("DPYD", pgx)) == "Poor Metabolizer"
