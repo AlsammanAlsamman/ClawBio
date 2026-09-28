@@ -140,7 +140,8 @@ One skill, one task: run `nf-core/rnastructurome` from FASTQ to per-base reactiv
 3. **Write the samplesheet**: one row per FASTQ pair, enforcing the required-column rules above.
 4. **Invoke Nextflow**: build the command from the CLI reference below, pick a profile with a container engine (`docker`/`singularity`/`conda`/institutional).
 5. **Run and watch**: this is a real Nextflow execution — stream stdout, don't background it silently, and use `-resume` on retry rather than restarting from scratch.
-6. **Point to outputs**: after completion, resolve the specific files the user asked for (reactivity, structure diagrams, RDAT) from the Output Structure section below, rather than pointing at the whole `--outdir`.
+6. **Report control pairing**: list which untreated control served each treated group. Exact `sample_group`+`replicate` matches come from the samplesheet; `fuzzy_untreated_pairing` fallbacks (base-token match, or one control reused for the whole reference) appear only as `log.warn` lines in `.nextflow.log`, so read them from there. Flag every fallback pairing and any treated group that ran without an untreated control. Ask the user to confirm the pairing is the one they intended before interpreting reactivities.
+7. **Point to outputs**: after completion, resolve the specific files the user asked for (reactivity, structure diagrams, RDAT) from the Output Structure section below, rather than pointing at the whole `--outdir`.
 
 ## CLI Reference
 

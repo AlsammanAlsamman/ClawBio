@@ -2,7 +2,7 @@
 
 Generated from `nextflow_schema.json` in [nf-core/rnastructurome](https://github.com/nf-core/rnastructurome) v1.0.0.
 Regenerate after a pipeline version bump rather than hand-editing: see the skill's SKILL.md `## Maintenance` section.
-Six rf-fold flag letters are hand-corrected against `conf/modules.config`, because the 1.0.0 schema descriptions name letters rf-fold never receives: `rffold_unconstrained` `-i`, `rffold_vienna_no_lonely_pairs` `-nlp`, `rffold_vienna_constrained` `-hc`, `rffold_vienna_max_bp_span` `-md`, `rffold_fold_constraint_file` `-c`, `rffold_dotplot` `-dp`. Re-apply after any regeneration until the schema is fixed upstream.
+Six rf-fold flag letters are hand-corrected against `conf/modules.config`, because the 1.0.0 schema descriptions name letters rf-fold never receives: `rffold_unconstrained` `-i`, `rffold_vienna_no_lonely_pairs` `-nlp`, `rffold_vienna_constrained` `-hc`, `rffold_vienna_max_bp_span` `-md`, `rffold_fold_constraint_file` `-c`, `rffold_dotplot` `-dp`. The `--fasta` description is likewise hand-corrected: the schema says "transcript FASTA", but by default it is read as a genome FASTA for STAR (see `--transcriptome`). Re-apply these after any regeneration until the schema is fixed upstream.
 This is the full audited surface; see the skill's own CLI Reference section for the subset used in everyday runs.
 
 ## Input/output options
@@ -18,7 +18,7 @@ This is the full audited surface; see the skill's own CLI Reference section for 
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `--fasta` | string | `—` | Path to transcript FASTA file. |
+| `--fasta` | string | `—` | Path to reference FASTA. A genome FASTA aligned with STAR when paired with `--gtf`; a transcript FASTA (Bowtie/Bowtie2) with `transcriptome: true`, or when given without `--gtf` (the pipeline warns and switches route). |
 | `--gtf` | string | `—` | Path to transcript annotation GTF file. |
 | `--genomes` | object | `—` | Optional custom reference map keyed by organism/reference name. |
 | `--ensembl_base_url` | string | `https://ftp.ensembl.org/pub` | Ensembl FTP base URL used when auto-resolving transcript FASTA. |
