@@ -128,7 +128,7 @@
       "has_script": true,
       "has_tests": true,
       "has_demo": true,
-      "demo_command": "python skills/ancestry-risk-profiler/ancestry_risk_profiler.py --demo",
+      "demo_command": "python skills/ancestry-risk-profiler/ancestry_risk_profiler.py --demo --ancestry SAS",
       "dependencies": [
         "python>=3.11",
         "matplotlib>=3.6"
