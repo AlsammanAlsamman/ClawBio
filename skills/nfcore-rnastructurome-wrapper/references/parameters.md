@@ -21,9 +21,9 @@ This is the full audited surface; see the skill's own CLI Reference section for 
 | `--fasta` | string | `—` | Path to reference FASTA. A genome FASTA aligned with STAR when paired with `--gtf`; a transcript FASTA (Bowtie/Bowtie2) with `transcriptome: true`, or when given without `--gtf` (the pipeline warns and switches route). |
 | `--gtf` | string | `—` | Path to transcript annotation GTF file. |
 | `--genomes` | object | `—` | Optional custom reference map keyed by organism/reference name. |
-| `--ensembl_base_url` | string | `https://ftp.ensembl.org/pub` | Ensembl FTP base URL used when auto-resolving transcript FASTA. |
-| `--ensembl_release` | string | `current` | Ensembl release for transcript FASTA auto-resolution (`current`, `latest`, or release number like `114`). |
-| `--ensembl_species_map` | object | `—` | Optional map from organism keys to Ensembl species names used for transcript FASTA auto-resolution. |
+| `--ensembl_base_url` | string | `https://ftp.ensembl.org/pub` | Ensembl FTP base URL used when auto-resolving the reference: soft-masked genome FASTA + GTF (default STAR route) or cDNA FASTA (`transcriptome: true`). |
+| `--ensembl_release` | string | `current` | Ensembl release for reference auto-resolution (`current`, `latest`, or release number like `114`). |
+| `--ensembl_species_map` | object | `—` | Optional map from organism keys to Ensembl species names used for reference auto-resolution. |
 | `--ncbi_accessions_map` | object | `—` | Internal map from normalized viral organism keys to NCBI accession lists. |
 
 ## Sample metadata options
@@ -180,10 +180,10 @@ This is the full audited surface; see the skill's own CLI Reference section for 
 | `--rffold_vienna_no_lonely_pairs` | boolean | `False` | Pass ViennaRNA no-lonely-pairs mode to rf-fold (`-nlp`). |
 | `--rffold_vienna_constrained` | boolean | `False` | Use ViennaRNA hard constraints with rf-fold (`-hc`). |
 | `--rffold_vienna_max_bp_span` | integer | `600` | Maximal base-pair span for ViennaRNA in rf-fold (`-md`). |
-| `--rffold_vienna_bp_span` | integer | `—` | Minimal base-pair span for ViennaRNA in rf-fold (`-vms`). |
+| `--rffold_vienna_bp_span` | integer | `—` | Minimal base-pair span for ViennaRNA in rf-fold (`-vms`). **Unused in 1.0.0:** declared but read by no module; setting it does nothing. |
 | `--rffold_only_common` | integer | `—` | Only fold transcripts covered in at least this number of XML experiments (`-oc`). |
 | `--rffold_fold_constraint_file` | string | `—` | Constraint file for allowed base-pairing positions (`-c`). |
-| `--rffold_unpaired_constraint_file` | string | `—` | Constraint file for required unpaired positions (`-uc`). |
+| `--rffold_unpaired_constraint_file` | string | `—` | Constraint file for required unpaired positions (`-uc`). **Unused in 1.0.0:** declared but read by no module; setting it does nothing. |
 | `--rffold_dotplot` | boolean | `True` | Generate dot plots from rf-fold (`-dp`). |
 | `--rffold_shannon_entropy` | boolean | `True` | Compute and report Shannon entropy in rf-fold (`-sh`). |
 | `--rffold_slope` | number | `—` | Slope for reactivity-to-folding-constraint conversion in rf-fold (`-sl`). Auto by `chemical`: DMS 4.6, NAI 2.2, 2A3 1, other/unset 1.8. Overridden by jackknife calibration when available. |

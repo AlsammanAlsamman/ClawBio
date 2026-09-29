@@ -11,6 +11,10 @@ Reference: human mitochondrial chromosome (16,569 bp). Reads: synthetic, from EN
 (MT-RNR1, MT:648-1601), guaranteed to map. Exercises the full STAR genome-alignment route on
 data small enough to finish in minutes.
 
+The `test` profile sets `rfnorm_raw: true`, `count_genome: true` and `rfnorm_nan: 0` so that
+rf-fold still has input on so few reads. The demo therefore does **not** exercise reactivity
+normalisation; don't read its `norm/` output as representative.
+
 Other bundled upstream test profiles:
 - `test_transcriptome` — exercises the Bowtie/Bowtie2 transcriptome route instead of STAR
 - `test_prokaryote` — bacterial reference, NCBI fallback resolution

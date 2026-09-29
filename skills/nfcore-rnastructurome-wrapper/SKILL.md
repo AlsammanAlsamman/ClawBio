@@ -145,7 +145,7 @@ One skill, one task: run `nf-core/rnastructurome` from FASTQ to per-base reactiv
 
 ## CLI Reference
 
-Full parameter surface (~150 flags): [`references/parameters.md`](references/parameters.md). Everyday flags:
+Full parameter surface (185 parameters): [`references/parameters.md`](references/parameters.md). Everyday flags:
 
 ```bash
 # Default: no reference supplied — auto-download from Ensembl/NCBI by organism, STAR genome route
