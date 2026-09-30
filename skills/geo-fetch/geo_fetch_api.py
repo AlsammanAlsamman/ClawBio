@@ -274,12 +274,28 @@ def finalize_sample_ids(rows):
     return rows
 
 
+# A scheme-less `host/path`, as ENA's fastq_ftp gives it: dotted labels ending
+# in an alphabetic TLD, then a slash.
+_BARE_HOST_RE = re.compile(r"^(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}/")
+
+
 def to_https(url):
+    """Return an https:// URL for an archive link, or None if it is not one.
+
+    `ftp://` is rewritten (these skills never speak FTP), `http(s)://` passes
+    through, and a scheme-less `host/path` gains `https://`. Anything else, such
+    as a bare file name in a submitter's SDRF, is not a URL: prefixing it would
+    make the file name `x.fastq.gz` a fake host of that name. The caller gets
+    None and decides what to report.
+    """
+    url = (url or "").strip()
     if url.startswith("ftp://"):
         return "https://" + url[len("ftp://"):]
-    if not url.startswith("http"):
+    if url.startswith(("http://", "https://")):
+        return url
+    if _BARE_HOST_RE.match(url):
         return "https://" + url
-    return url
+    return None
 
 
 def fastq_pair(urls):
@@ -516,7 +532,7 @@ def cmd_samplesheet(args):
             f1, f2 = local_fastq_names(run, r.get("library_layout"), args.fastq_dir,
                                        args.fastq_naming, read_map)
         else:
-            urls = [to_https(l) for l in r.get("fastq_ftp", "").split(";") if l]
+            urls = [u for u in map(to_https, r.get("fastq_ftp", "").split(";")) if u]
             if read_map:
                 f1, f2 = pick_by_read_map(urls, read_map, run)
             else:

@@ -64,7 +64,27 @@ class TestCredentialGate:
         assert result["summary"]["ncbi_credentials_sent"] is False
 
 
+TO_HTTPS_CASES = [
+    ("ftp://ftp.sra.ebi.ac.uk/vol1/x.fastq.gz", "https://ftp.sra.ebi.ac.uk/vol1/x.fastq.gz"),
+    ("https://ftp.sra.ebi.ac.uk/vol1/x.fastq.gz", "https://ftp.sra.ebi.ac.uk/vol1/x.fastq.gz"),
+    ("http://example.org/x.fastq.gz", "http://example.org/x.fastq.gz"),
+    # ENA's fastq_ftp is scheme-less host/path; that is why a scheme is added at all
+    ("ftp.sra.ebi.ac.uk/vol1/x.fastq.gz", "https://ftp.sra.ebi.ac.uk/vol1/x.fastq.gz"),
+    # not URLs: returned as None, never dressed up as https://<filename>
+    ("sample_R1.fastq.gz", None),
+    ("/data/fastq/sample_R1.fastq.gz", None),
+    ("fastq/sample_R1.fastq.gz", None),
+    ("", None),
+]
+
+
 class TestVendoredApi:
+    @pytest.mark.parametrize("value, expected", TO_HTTPS_CASES)
+    def test_to_https_only_accepts_urls(self, value, expected):
+        import geo_fetch_api as api
+
+        assert api.to_https(value) == expected
+
     def test_ftp_paths_shard_the_accession(self):
         """GEO's FTP layout buckets by accession: GSE30720 -> series/GSE30nnn."""
         import geo_fetch_api as api

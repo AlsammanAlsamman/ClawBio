@@ -280,12 +280,28 @@ def finalize_sample_ids(rows):
     return rows
 
 
+# A scheme-less `host/path`, as ENA's fastq_ftp gives it: dotted labels ending
+# in an alphabetic TLD, then a slash.
+_BARE_HOST_RE = re.compile(r"^(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}/")
+
+
 def to_https(url):
+    """Return an https:// URL for an archive link, or None if it is not one.
+
+    `ftp://` is rewritten (these skills never speak FTP), `http(s)://` passes
+    through, and a scheme-less `host/path` gains `https://`. Anything else, such
+    as a bare file name in a submitter's SDRF, is not a URL: prefixing it would
+    make the file name `x.fastq.gz` a fake host of that name. The caller gets
+    None and decides what to report.
+    """
+    url = (url or "").strip()
     if url.startswith("ftp://"):
         return "https://" + url[len("ftp://"):]
-    if not url.startswith("http"):
+    if url.startswith(("http://", "https://")):
+        return url
+    if _BARE_HOST_RE.match(url):
         return "https://" + url
-    return url
+    return None
 
 
 def fastq_pair(urls):
@@ -432,7 +448,7 @@ def ena_run_fastq(run):
     links = []
     for ln in text.splitlines()[1:]:
         links.extend(x for x in ln.split("\t")[-1].split(";") if x)
-    return [to_https(x) for x in links]
+    return [u for u in map(to_https, links) if u]
 
 
 def write_samplesheet(rows, out, assay, strandedness="auto"):
@@ -515,9 +531,17 @@ def cmd_samplesheet(args):
     groups = {}
     order = []
     for key, g in group_sdrf_rows(rows[1:], header):
-        g = {"sample": g["sample"], "run": g["run"],
-             "uris": [to_https(row[i].strip()) for row in g["rows"] for i in fi
-                      if i < len(row) and row[i].strip()]}
+        uris = []
+        for value in (row[i].strip() for row in g["rows"] for i in fi
+                      if i < len(row) and row[i].strip()):
+            url = to_https(value)
+            if url:
+                uris.append(url)
+            else:
+                # Submitter free text; the run's ENA links are used instead.
+                print(f"warning: Comment[FASTQ_URI] {value!r} is not a URL; ignored",
+                      file=sys.stderr)
+        g = {"sample": g["sample"], "run": g["run"], "uris": uris}
         groups[key] = g
         order.append(key)
 

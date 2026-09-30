@@ -6,6 +6,7 @@ No network required: every HTTP call is mocked against the committed demo
 fixtures in ../examples/.
 """
 
+import csv
 import json
 import re
 import subprocess
@@ -78,7 +79,27 @@ def _clear_info_cache():
 # --------------------------------------------------------------------------
 
 
+TO_HTTPS_CASES = [
+    ("ftp://ftp.sra.ebi.ac.uk/vol1/x.fastq.gz", "https://ftp.sra.ebi.ac.uk/vol1/x.fastq.gz"),
+    ("https://ftp.sra.ebi.ac.uk/vol1/x.fastq.gz", "https://ftp.sra.ebi.ac.uk/vol1/x.fastq.gz"),
+    ("http://example.org/x.fastq.gz", "http://example.org/x.fastq.gz"),
+    # ENA's fastq_ftp is scheme-less host/path; that is why a scheme is added at all
+    ("ftp.sra.ebi.ac.uk/vol1/x.fastq.gz", "https://ftp.sra.ebi.ac.uk/vol1/x.fastq.gz"),
+    # not URLs: returned as None, never dressed up as https://<filename>
+    ("sample_R1.fastq.gz", None),
+    ("/data/fastq/sample_R1.fastq.gz", None),
+    ("fastq/sample_R1.fastq.gz", None),
+    ("", None),
+]
+
+
 class TestVendoredApi:
+    @pytest.mark.parametrize("value, expected", TO_HTTPS_CASES)
+    def test_to_https_only_accepts_urls(self, value, expected):
+        import arrayexpress_fetch_api as api
+
+        assert api.to_https(value) == expected
+
     def test_walk_files_finds_every_file_node(self):
         import arrayexpress_fetch_api as api
 
@@ -347,6 +368,32 @@ class TestSdrfAndSamplesheet:
 # --------------------------------------------------------------------------
 # Safety
 # --------------------------------------------------------------------------
+
+
+class TestFastqUriValues:
+    def test_a_bare_filename_uri_falls_back_to_ena(self, tmp_path, capsys):
+        """Comment[FASTQ_URI] is submitter free text. A bare filename is not a URL:
+        it is reported and ignored, so the run's ENA links are used instead."""
+        import argparse
+
+        import arrayexpress_fetch_api as api
+
+        sdrf = ("Source Name\tComment[ENA_RUN]\tComment[FASTQ_URI]\n"
+                "S1\tERR1\tS1_1.fastq.gz\n"
+                "S1\tERR1\tS1_2.fastq.gz\n")
+        ena = ["https://ftp.sra.ebi.ac.uk/vol1/ERR1_1.fastq.gz",
+               "https://ftp.sra.ebi.ac.uk/vol1/ERR1_2.fastq.gz"]
+        out = tmp_path / "samplesheet.csv"
+        args = argparse.Namespace(accession="E-MTAB-1", assay="bulk", strandedness="auto",
+                                  out=str(out), local_dir=None, fastq_dir=None,
+                                  fastq_naming=None, read_map=None)
+        with patch.object(api, "get_sdrf_text", return_value=sdrf), \
+                patch.object(api, "ena_run_fastq", return_value=ena) as fallback:
+            api.cmd_samplesheet(args)
+        fallback.assert_called_once_with("ERR1")
+        row = next(csv.DictReader(out.open()))
+        assert (row["fastq_1"], row["fastq_2"]) == tuple(ena)
+        assert "S1_1.fastq.gz" in capsys.readouterr().err
 
 
 class TestSafety:
