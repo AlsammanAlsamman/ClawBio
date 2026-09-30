@@ -175,11 +175,11 @@ Steps 2–6 are prescriptive: the endpoints, the classification rules, the
 harmonisation keys and the read-pairing logic are fixed. Step 7's narrative
 framing is yours.
 
-**Before running or submitting anything**: `--command download-script` writes a
-script and downloads nothing. `--run` and `--submit` are off by default. Show the
-user the accessions, target directory and rough data volume, and *ask* whether to
-run locally, submit, or stop. Never run unprompted, and never treat one approval
-as covering a later run.
+**Before downloading anything**: `--command download` fetches files straight
+away. Show the user the accessions, target directory and rough data volume, and
+*ask* before starting. Never treat one approval as covering a later run. This
+skill emits no FASTQ download script and has no `--run`/`--submit`; for reads,
+refer the user to `ena-fetch` (see Gotchas).
 
 ## CLI Reference
 
@@ -328,7 +328,6 @@ output_directory/
 ├── tables/
 │   └── metadata.tsv
 ├── downloads/                       # (optional) --command download only
-├── download_arrayexpress.sh         # (optional) --command download-script only
 └── reproducibility/
     ├── commands.sh
     ├── environment.yml
@@ -338,8 +337,6 @@ output_directory/
 ## Dependencies
 
 - **Python** ≥ 3.10, standard library only. No pip install required.
-- **`curl` or `wget`** — only for a generated `download-script`, not for the
-  skill itself.
 - **Network access** to `www.ebi.ac.uk` and `ftp.ebi.ac.uk` on TCP/443. See
   Gotcha 5.
 
@@ -420,8 +417,9 @@ output_directory/
   [docs/data-handling.md](../../docs/data-handling.md).
 - **Credentials**: none. ArrayExpress needs no key, and the skill reads no
   credential environment variables.
-- **Execution**: `--run` and `--submit` are off by default and must be confirmed
-  with the user each time.
+- **Execution**: this skill runs nothing it writes; it emits no download script.
+  `--command download` fetches files immediately, so confirm it with the user
+  each time.
 - **Disclaimer**: every report carries the ClawBio medical disclaimer —
   *"ClawBio is a research and educational tool. It is not a medical device and
   does not provide clinical diagnoses. Consult a healthcare professional before

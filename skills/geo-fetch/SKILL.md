@@ -347,7 +347,7 @@ download script; `sbatch` if it is submitted.
 
 - **Local-first**: no user genetic data is ever transmitted. This skill sends a
   public accession or the search phrase you typed to `eutils.ncbi.nlm.nih.gov`,
-  `ftp.ncbi.nlm.nih.gov` and `www.ebi.ac.uk`, and receives public archive data.
+  `www.ncbi.nlm.nih.gov`, `ftp.ncbi.nlm.nih.gov` and `www.ebi.ac.uk`, and receives public archive data.
   Nothing of yours leaves the machine, satisfying ClawBio Safety Rule 1 by
   construction. See [docs/data-handling.md](../../docs/data-handling.md).
 - **Credentials**: `NCBI_EMAIL` and `NCBI_API_KEY` are sent **only** with

@@ -91,10 +91,10 @@ cache them locally where noted.
 | `busco-assessor` | eutils.ncbi.nlm.nih.gov, ftp.ensemblgenomes.org | Taxonomy lookups and BUSCO lineage datasets. | `NCBI_API_KEY` (optional) |
 | `deepspot-m` | huggingface.co | Model weights on first use. Inference is local. | none |
 | `proteomics-clock` | raw.githubusercontent.com | Published coefficient tables, cached under `CLAWBIO_CACHE`. | none |
-| `arrayexpress-fetch` | www.ebi.ac.uk (BioStudies API, BioSamples), ftp.ebi.ac.uk | The accession or search phrase you typed. `--command download` fetches MAGE-TAB, raw or processed files from the FTP host the API advertises; `--command sdrf` and `--command samplesheet` read the attached SDRF from that same host. `--command download-script` only writes a script; `--run`/`--submit` execute it and are off by default. | none |
+| `arrayexpress-fetch` | www.ebi.ac.uk (BioStudies API, BioSamples), ftp.ebi.ac.uk | The accession or search phrase you typed. `--command download` fetches MAGE-TAB, raw or processed files from the FTP host the API advertises; `--command sdrf` and `--command samplesheet` read the attached SDRF from that same host. It emits no download script: FASTQ reads are brokered to ENA, so use `ena-fetch` for those. | none |
 | `biostudies-fetch` | www.ebi.ac.uk (BioStudies API, BioSamples), ftp.ebi.ac.uk | The accession or search phrase you typed. `--command download` fetches the study's attached files from the FTP host the API advertises. | none |
 | `ena-fetch` | www.ebi.ac.uk (ENA Portal + Browser), ftp.sra.ebi.ac.uk | The accession or Portal query you typed. `--command download` fetches FASTQ or submitted files. `--command download-script` only writes a script; `--run`/`--submit` execute it and are off by default. | none |
-| `geo-fetch` | eutils.ncbi.nlm.nih.gov, ftp.ncbi.nlm.nih.gov, www.ebi.ac.uk (ENA Portal) | The accession or search phrase you typed. GEO series are resolved to their SRA project and then to ENA for FASTQ links. `--command download` fetches series matrix / SOFT / MINiML / supplementary files. | `NCBI_EMAIL`, `NCBI_API_KEY` — read from the environment but **only sent with `--use-ncbi-credentials`**; presence of the variable is not consent |
+| `geo-fetch` | eutils.ncbi.nlm.nih.gov, www.ncbi.nlm.nih.gov (GEO accession pages), ftp.ncbi.nlm.nih.gov, www.ebi.ac.uk (ENA Portal) | The accession or search phrase you typed. GEO series are resolved to their SRA project and then to ENA for FASTQ links; `samplesheet`, `runtable` and `metadata-table` also read GEO's accession pages on www.ncbi.nlm.nih.gov. `--command download` fetches series matrix / SOFT / MINiML / supplementary files. | `NCBI_EMAIL`, `NCBI_API_KEY` — read from the environment but **only sent with `--use-ncbi-credentials`**; presence of the variable is not consent |
 | `pride-fetch` | www.ebi.ac.uk (PRIDE API), ftp.pride.ebi.ac.uk | The accession or keyword you typed. `--command download` fetches project files, and a submitter SDRF is read from the FTP host. `--command download-script` only writes a script. | none |
 | `nfcore-rnaseq-wrapper`, `nfcore-sarek-wrapper`, `nfcore-scrnaseq-wrapper` | nf-co.re, github.com, and the container registries the pipeline declares | Nextflow pulls the pinned pipeline and its containers. Your samples stay in the local work directory. Set `NXF_OFFLINE=true` with pre-pulled assets to forbid all of it. | none (Sentieon licence variables for that sarek path only) |
 
@@ -121,6 +121,7 @@ metadata host:
 | `ftp.sra.ebi.ac.uk` | ENA **FASTQ** bytes | `193.62.193.165` |
 | `ftp.pride.ebi.ac.uk` | PRIDE **file** bytes, submitter SDRFs | `193.62.193.165` |
 | `eutils.ncbi.nlm.nih.gov` | GEO E-utilities | `34.107.134.59` |
+| `www.ncbi.nlm.nih.gov` | GEO accession pages (SRA project, sample SOFT) | `34.107.134.59` (2026-09-30) |
 | `ftp.ncbi.nlm.nih.gov` | GEO series matrix / SOFT / supplementary | `130.14.250.7`, `130.14.250.10` |
 
 So the request to a network administrator is *"allow these destination
@@ -131,7 +132,7 @@ Diagnose with the host, not the accession:
 
 ```bash
 for h in www.ebi.ac.uk ftp.ebi.ac.uk ftp.sra.ebi.ac.uk ftp.pride.ebi.ac.uk \
-         eutils.ncbi.nlm.nih.gov ftp.ncbi.nlm.nih.gov; do
+         eutils.ncbi.nlm.nih.gov www.ncbi.nlm.nih.gov ftp.ncbi.nlm.nih.gov; do
   printf '%-26s %s\n' "$h" "$(curl -sS -o /dev/null -m 15 -w '%{http_code}' "https://$h/" 2>&1)"
 done
 # 200/3xx/403 = reachable (the server answered);  000 = blocked before it could
