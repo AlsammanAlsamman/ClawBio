@@ -60,6 +60,58 @@ class TestVendoredApi:
         assert len(api.MINIMAL_SDRF_COLUMNS) == 19
 
 
+class TestSdrfPlaceholders:
+    """Defaults that are wrong for some rows must be `not available`, not a guess."""
+
+    META = {"organisms": [{"name": "Homo sapiens (human)"}],
+            "diseases": [{"name": "Alzheimer disease"}, {"name": "normal"}]}
+
+    def test_project_disease_is_not_stamped_on_every_row(self, capsys):
+        """A case/control project's first disease would label the controls too."""
+        import pride_fetch_api as api
+
+        with patch.object(api, "get_json", return_value=self.META):
+            d = api.minimal_defaults("PXD0", None)
+        assert d["characteristics[disease]"] == "not available"
+        assert d["characteristics[organism]"] == "Homo sapiens"
+        err = capsys.readouterr().err
+        assert "Alzheimer disease" in err and "normal" in err
+
+    @pytest.mark.parametrize("acq, expected", [
+        (None, "not available"),
+        ("dia", "data-independent acquisition"),
+        ("dda", "data-dependent acquisition"),
+    ])
+    def test_acquisition_is_only_set_when_given(self, acq, expected):
+        import pride_fetch_api as api
+
+        with patch.object(api, "get_json", return_value={}):
+            d = api.minimal_defaults("PXD0", acq)
+        assert d["comment[proteomics data acquisition method]"] == expected
+
+    def test_a_submitter_sdrf_is_not_completed_with_a_guessed_acquisition(self, tmp_path):
+        import pride_fetch_api as api
+
+        with patch.object(api, "get_json", return_value={}):
+            defaults = api.minimal_defaults("PXD0", None)
+        out = tmp_path / "x.sdrf.tsv"
+        api.complete_existing_sdrf("source name\tcomment[data file]\nS1\ta.raw\n",
+                                   str(out), defaults)
+        rows = list(csv.DictReader(out.open(), delimiter="\t"))
+        assert rows[0]["comment[proteomics data acquisition method]"] == "not available"
+
+    def test_the_entry_point_does_not_default_the_acquisition(self, tmp_path):
+        import pride_fetch as app
+
+        args = app._build_parser().parse_args(
+            ["--command", "samplesheet", "--accession", "PXD0"])
+        assert "--acquisition" not in app._to_upstream_argv(args, tmp_path)
+        args = app._build_parser().parse_args(
+            ["--command", "samplesheet", "--accession", "PXD0", "--acquisition", "dda"])
+        argv = app._to_upstream_argv(args, tmp_path)
+        assert argv[argv.index("--acquisition") + 1] == "dda"
+
+
 class TestMetadataTableFromSdrf:
     """The SDRF-driven path cannot be demoed (submitter SDRFs live on
     ftp.pride.ebi.ac.uk), so it is covered here with a synthetic SDRF."""

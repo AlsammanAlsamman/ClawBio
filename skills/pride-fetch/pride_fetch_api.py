@@ -73,7 +73,7 @@ SDRF_DEFAULTS = {
     "comment[fraction identifier]": "1",
     "comment[label]": "label free sample",
     "comment[instrument]": "not available",
-    "comment[proteomics data acquisition method]": "data-independent acquisition",
+    "comment[proteomics data acquisition method]": "not available",
     "comment[cleavage agent details]": "NT=Trypsin;AC=MS:1001251",
     "comment[modification parameters]": "NT=Carbamidomethyl;AC=UNIMOD:4;MT=Fixed;PP=Anywhere;TA=C",
     "comment[precursor mass tolerance]": "10 ppm",
@@ -370,11 +370,22 @@ def is_ms_file(name):
     return name.lower().endswith(MS_FILE_EXTS)
 
 
-def minimal_defaults(accession, acquisition):
-    """Defaults for the shared minimal columns, enriched from project metadata."""
+ACQUISITION_METHODS = {"dia": "data-independent acquisition",
+                       "dda": "data-dependent acquisition"}
+
+
+def minimal_defaults(accession, acquisition=None):
+    """Defaults for the shared minimal columns, enriched from project metadata.
+
+    Only values true of every row are filled from the project. Disease is not:
+    PRIDE lists a project's diseases, not each sample's, so copying the first
+    one would label a case/control study's controls with the diagnosis. The
+    acquisition method is set only when the user names it; a guessed `dia`
+    would also be stamped onto a submitter SDRF that merely lacked the column.
+    """
     d = dict(SDRF_DEFAULTS)
-    d["comment[proteomics data acquisition method]"] = (
-        "data-independent acquisition" if acquisition == "dia" else "data-dependent acquisition")
+    if acquisition:
+        d["comment[proteomics data acquisition method]"] = ACQUISITION_METHODS[acquisition]
     try:
         meta = get_json(f"/projects/{accession}")
     except SystemExit:
@@ -383,8 +394,11 @@ def minimal_defaults(accession, acquisition):
         name = re.sub(r"\s*\(.*\)$", "", meta["organisms"][0].get("name", "")).strip()
         if name:
             d["characteristics[organism]"] = name
-    if meta.get("diseases"):
-        d["characteristics[disease]"] = meta["diseases"][0].get("name") or d["characteristics[disease]"]
+    diseases = [x.get("name") for x in meta.get("diseases") or [] if x.get("name")]
+    if diseases:
+        print(f"note: the project lists disease(s) {', '.join(diseases)}; "
+              "characteristics[disease] is left 'not available' - set it per sample.",
+              file=sys.stderr)
     if meta.get("instruments"):
         d["comment[instrument]"] = _cv_term(meta["instruments"][0])
     return d
@@ -493,7 +507,7 @@ def cmd_samplesheet(args):
     print(f"Minimal SDRF columns present: {n_ok}/{len(MINIMAL_SDRF_COLUMNS)}.", file=sys.stderr)
     if still_missing:
         print(f"  WARNING still missing: {', '.join(still_missing)}", file=sys.stderr)
-    print("Review placeholder values (acquisition method, instrument, tolerances, "
+    print("Review placeholder values (acquisition method, disease, instrument, tolerances, "
           "enzyme, modifications, organism part, factor value) before running quantms.",
           file=sys.stderr)
 
@@ -725,8 +739,9 @@ def main(argv=None):
     ss.add_argument("--from", dest="source", choices=["auto", "pride", "generate"], default="auto",
                     help="auto: use submitter SDRF if present else generate; "
                          "pride: submitter SDRF only; generate: build from data files + metadata")
-    ss.add_argument("--acquisition", choices=["dia", "dda"], default="dia",
-                    help="value for comment[proteomics data acquisition method] (default dia)")
+    ss.add_argument("--acquisition", choices=["dia", "dda"], default=None,
+                    help="value for comment[proteomics data acquisition method] "
+                         "(default: 'not available', to be reviewed)")
     ss.add_argument("--local-dir",
                     help="write comment[data file] as local paths <dir>/<file> "
                          "(matching download-script output) instead of bare filenames")

@@ -243,7 +243,7 @@ submitter SDRF, so the demo exercises the *generate* path.
 **Key parameters**
 - Core columns: `sample, replicate, species, sex, age, condition, genotype, treatment, tissue`
 - Minimal SDRF: 19 columns (quantms/quantmsdiann contract)
-- Default acquisition: `dia`
+- Acquisition method: `not available` unless `--acquisition dia|dda` is given
 - Missing value token: `NA`
 
 ## Example Queries
@@ -297,9 +297,15 @@ depends on the accession, so it is not listed as a fixed path above.
   `.sdrf`. Do not. quantms rejects anything but **`.sdrf.tsv`**, so the skill
   rewrites the extension and prints a note. Do not "fix" the name afterwards.
 - **Gotcha 2**: A generated minimal SDRF is a **scaffold, not an answer**. The
-  acquisition method, instrument, tolerances, enzyme, modifications, organism
-  part and factor value are placeholders. Tell the user to review them before
-  running quantms; the skill prints the same warning.
+  acquisition method, disease, instrument, tolerances, enzyme, modifications,
+  organism part and factor value are placeholders. Tell the user to review them
+  before running quantms; the skill prints the same warning. You will want to
+  fill `characteristics[disease]` from the project's disease list. Do not.
+  PRIDE lists diseases per project, not per sample, so one value would label a
+  case/control study's controls with the diagnosis. The skill prints the list;
+  set the value per sample. Likewise, pass `--acquisition` only when the user
+  knows it. Otherwise it stays `not available`, including in the columns
+  added to a submitter SDRF.
 - **Gotcha 3**: You will assume every project has a submitter SDRF. Many do
   not — the demo project is one. `--from auto` silently falls through to
   generating one, so check which path was taken before treating the columns as

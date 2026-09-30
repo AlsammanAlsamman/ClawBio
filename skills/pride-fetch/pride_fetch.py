@@ -57,7 +57,7 @@ def _build_parser():
     p.add_argument("--ext", help="filter by extension, e.g. raw, mzid, mzML, mgf")
     p.add_argument("--from", dest="source", choices=["auto", "pride", "generate"],
                    default="auto", help="SDRF source for --command samplesheet")
-    p.add_argument("--acquisition", choices=["dia", "dda"], default="dia")
+    p.add_argument("--acquisition", choices=["dia", "dda"], default=None)
     p.add_argument("--local-dir")
     p.add_argument("--tool", choices=["curl", "wget"], default="curl",
                    help="download-script transfer tool; curl is the default "
@@ -105,9 +105,9 @@ def _to_upstream_argv(args, output_dir: Path) -> list[str]:
                 "--out", str(af.resolve_out(args.out, output_dir, "tables/metadata.tsv"))]
     if cmd == "samplesheet":
         return ["samplesheet", args.accession, "--from", args.source,
-                "--acquisition", args.acquisition,
                 "--out", str(af.resolve_out(
                     args.out, output_dir, f"{args.accession}.sdrf.tsv"))] + (
+            ["--acquisition", args.acquisition] if args.acquisition else []) + (
             ["--local-dir", args.local_dir] if args.local_dir else [])
     if cmd == "download-script":
         argv = ["download-script", args.accession, "--tool", args.tool,
