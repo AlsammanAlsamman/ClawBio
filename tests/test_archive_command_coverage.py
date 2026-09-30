@@ -169,3 +169,64 @@ def test_every_runner_allowlisted_flag_exists_on_the_skill(skill):
         entry.get("allowed_extra_flags_without_values", ()))
     missing = sorted(allowed - known)
     assert not missing, f"clawbio/cli.py allowlists {missing} for {skill}, which its parser lacks"
+
+
+@pytest.mark.parametrize("skill", SKILLS)
+def test_every_allowlisted_flag_survives_the_runner(skill, monkeypatch, tmp_path):
+    """Pass each allowlisted flag through the real INT-001 filter in run_skill.
+
+    `allowed_extra_flags_without_values` only says which allowed flags take no
+    value. A flag listed there but not in `allowed_extra_flags` is dropped
+    without a word, so `clawbio.py run geo-fetch --suppl` quietly downloaded
+    the series matrix instead of the supplementary files.
+    """
+    import subprocess
+
+    import clawbio.cli as cli
+
+    entry = cli.SKILLS[skill]
+    no_value = set(entry.get("allowed_extra_flags_without_values", ()))
+    with_value = set(entry.get("allowed_extra_flags", ())) - no_value
+    extra = []
+    for flag in sorted(with_value):
+        extra += [flag, "x"]
+    extra += sorted(no_value)
+
+    seen = []
+
+    def fake_run(cmd, *args, **kwargs):
+        seen.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    cli.run_skill(skill_name=skill, output_dir=str(tmp_path), extra_args=extra)
+    forwarded = set(seen[0])
+    dropped = sorted((with_value | no_value) - forwarded)
+    assert not dropped, f"clawbio.py run silently drops {dropped} for {skill}"
+
+
+@pytest.mark.parametrize("skill", SKILLS)
+def test_boolean_flags_never_swallow_the_next_token(skill, monkeypatch, tmp_path):
+    """A store_true flag registered as taking a value makes the runner forward
+    the next token as its argument, so `--json stray` smuggles `stray` through
+    the allowlist."""
+    import subprocess
+
+    import clawbio.cli as cli
+
+    app = _load_entry_point(skill)
+    parser = app._build_parser()
+    boolean = sorted(
+        opt for action in parser._actions if action.nargs == 0
+        for opt in action.option_strings
+        if opt in cli.SKILLS[skill].get("allowed_extra_flags", ()))
+    assert boolean, f"{skill}: expected at least --json among the allowlisted booleans"
+
+    seen = []
+    monkeypatch.setattr(cli.subprocess, "run", lambda cmd, *a, **k: (
+        seen.append(cmd), subprocess.CompletedProcess(cmd, 0, "", ""))[1])
+    for flag in boolean:
+        seen.clear()
+        cli.run_skill(skill_name=skill, output_dir=str(tmp_path),
+                      extra_args=[flag, "stray-token"])
+        assert "stray-token" not in seen[0], f"{skill}: {flag} swallowed the next token"

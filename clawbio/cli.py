@@ -1059,10 +1059,12 @@ SKILLS = {
         "allowed_extra_flags": {
             "--command", "--accession", "--query", "--limit", "--out", "--json",
             "--match", "--assay", "--strandedness", "--local-dir", "--fastq-dir",
-            "--fastq-naming", "--read-map",
+            "--fastq-naming", "--read-map", "--magetab", "--processed", "--raw",
         },
+        # Every flag here must also be in allowed_extra_flags: this set only
+        # marks which allowed flags take no value.
         "allowed_extra_flags_without_values": {
-            "--magetab", "--processed", "--raw",
+            "--json", "--magetab", "--processed", "--raw",
         },
         "no_input_required": True,
         "accepts_genotypes": False,
@@ -1077,6 +1079,7 @@ SKILLS = {
             "--command", "--accession", "--query", "--limit", "--out", "--json",
             "--collection", "--match",
         },
+        "allowed_extra_flags_without_values": {"--json"},
         "no_input_required": True,
         "accepts_genotypes": False,
     },
@@ -1089,9 +1092,9 @@ SKILLS = {
             "--result", "--fields", "--format", "--assay", "--strandedness",
             "--group-by", "--local-dir", "--fastq-dir", "--fastq-naming",
             "--read-map", "--tool", "--partition", "--account", "--job-name",
-            "--cpus", "--mem", "--time", "--email",
+            "--cpus", "--mem", "--time", "--email", "--submitted", "--no-slurm",
         },
-        "allowed_extra_flags_without_values": {"--submitted", "--no-slurm"},
+        "allowed_extra_flags_without_values": {"--json", "--submitted", "--no-slurm"},
         "no_input_required": True,
         "accepts_genotypes": False,
     },
@@ -1104,12 +1107,13 @@ SKILLS = {
             "--organism", "--type", "--assay", "--strandedness", "--group-by",
             "--local-dir", "--from-runtable", "--fastq-dir", "--fastq-naming",
             "--read-map", "--tool", "--partition", "--account", "--job-name",
-            "--cpus", "--mem", "--time", "--email",
+            "--cpus", "--mem", "--time", "--email", "--use-ncbi-credentials",
+            "--matrix", "--soft", "--miniml", "--suppl", "--no-slurm",
         },
         # NCBI credentials are opt-in and carry no value; the skill never sends
         # NCBI_EMAIL / NCBI_API_KEY without this flag.
         "allowed_extra_flags_without_values": {
-            "--use-ncbi-credentials", "--matrix", "--soft", "--miniml",
+            "--json", "--use-ncbi-credentials", "--matrix", "--soft", "--miniml",
             "--suppl", "--no-slurm",
         },
         "no_input_required": True,
@@ -1123,9 +1127,9 @@ SKILLS = {
             "--command", "--accession", "--query", "--limit", "--out", "--json",
             "--ext", "--from", "--acquisition", "--local-dir", "--tool",
             "--outdir", "--job-name", "--partition", "--account", "--cpus",
-            "--mem", "--time", "--email",
+            "--mem", "--time", "--email", "--unzip", "--no-slurm",
         },
-        "allowed_extra_flags_without_values": {"--unzip", "--no-slurm"},
+        "allowed_extra_flags_without_values": {"--json", "--unzip", "--no-slurm"},
         "no_input_required": True,
         "accepts_genotypes": False,
     },
