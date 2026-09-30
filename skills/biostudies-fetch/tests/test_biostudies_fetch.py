@@ -217,6 +217,19 @@ class TestDemo:
 
 
 class TestSafety:
+    @pytest.mark.parametrize("hostile", ["../escaped.txt", "a/../../escaped.txt", "/tmp/escaped.txt"])
+    def test_download_refuses_a_path_that_escapes_the_output_dir(self, tmp_path, hostile):
+        """The file path comes from the archive API response, not from the user."""
+        import biostudies_fetch_api as api
+
+        out = tmp_path / "out"
+        with patch.object(api.urllib.request, "urlopen",
+                          side_effect=AssertionError("must refuse before any request")), \
+                patch.object(api, "study_info", return_value={}):
+            with pytest.raises(SystemExit, match="outside"):
+                api.download_file("S-TEST1", hostile, str(out))
+        assert not (tmp_path / "escaped.txt").exists()
+
     def test_warns_before_overwriting(self, tmp_path, capsys):
         """AGENTS.md Safety Boundary 5."""
         import biostudies_fetch as app

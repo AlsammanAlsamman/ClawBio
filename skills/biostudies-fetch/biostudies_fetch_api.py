@@ -27,6 +27,8 @@ import time
 import urllib.parse
 import urllib.request
 
+from clawbio.common.archive_fetch import safe_join
+
 API = "https://www.ebi.ac.uk/biostudies/api/v1"
 FILES = "https://www.ebi.ac.uk/biostudies/files"
 USER_AGENT = "biostudies-skill/1.0"
@@ -159,7 +161,7 @@ def file_url(accession, path):
 
 def download_file(accession, path, out_dir):
     url = file_url(accession, path)
-    dest = os.path.join(out_dir, path)
+    dest = str(safe_join(out_dir, path))
     os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
     if os.path.exists(dest):
         print(f"  exists, skipping {path}", file=sys.stderr)

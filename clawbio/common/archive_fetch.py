@@ -114,6 +114,20 @@ def resolve_out(user_out: str | None, output_dir: Path, default_rel: str) -> Pat
     return resolved
 
 
+def safe_join(base: Path | str, rel: str) -> Path:
+    """Join an archive-supplied relative path onto `base`, refusing any escape.
+
+    File paths in BioStudies / ArrayExpress file lists come from the API
+    response, not from the user, so `../x`, an absolute path, or a symlink out
+    of `base` must never decide where bytes land.
+    """
+    root = Path(base).resolve()
+    dest = (root / rel).resolve()
+    if dest != root and root in dest.parents:
+        return dest
+    raise SystemExit(f"refusing archive file path outside the output directory: {rel!r}")
+
+
 def scrub(text: str, output_dir: Path) -> str:
     """Replace the absolute output path with a stable placeholder.
 

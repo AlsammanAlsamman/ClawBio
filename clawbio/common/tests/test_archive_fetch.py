@@ -67,3 +67,27 @@ class TestRunUpstream:
 
         out, _ = af.run_upstream(types.SimpleNamespace(main=main), ["x"], tmp_path)
         assert str(tmp_path) not in out
+
+
+class TestSafeJoin:
+    """A file path supplied by an archive API must not escape the output dir."""
+
+    def test_a_nested_relative_path_stays_under_the_base(self, tmp_path):
+        assert af.safe_join(tmp_path, "sub/ok.txt") == (tmp_path / "sub" / "ok.txt").resolve()
+
+    @pytest.mark.parametrize("hostile", ["../evil", "a/../../evil", "/etc/passwd", ".."])
+    def test_an_escaping_path_is_refused(self, tmp_path, hostile):
+        with pytest.raises(SystemExit, match="outside"):
+            af.safe_join(tmp_path, hostile)
+
+    def test_a_dot_dot_that_stays_inside_is_allowed(self, tmp_path):
+        assert af.safe_join(tmp_path, "a/../b.txt") == (tmp_path / "b.txt").resolve()
+
+    def test_a_symlink_out_of_the_base_is_refused(self, tmp_path):
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        base = tmp_path / "base"
+        base.mkdir()
+        (base / "link").symlink_to(outside)
+        with pytest.raises(SystemExit, match="outside"):
+            af.safe_join(base, "link/x.txt")
