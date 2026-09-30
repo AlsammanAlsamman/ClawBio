@@ -163,6 +163,40 @@ class TestDemo:
         assert rows and all(r["fastq_1"].startswith("http") for r in rows)
         assert all(r["strandedness"] == "auto" for r in rows)
 
+    def test_demo_samplesheet_writes_the_archive_md5_sidecar(self, tmp_path):
+        """fastq_md5 is ';'-aligned with fastq_ftp; each URL keeps its own checksum."""
+        import ena_fetch as app
+
+        app.main(["--demo", "--output", str(tmp_path)])
+        rows = list(csv.DictReader((tmp_path / "fastq_md5.tsv").open(), delimiter="\t"))
+        md5 = {r["url"]: r["md5"] for r in rows}
+        assert md5["https://ftp.sra.ebi.ac.uk/vol1/fastq/ERR101/054/ERR10181254/"
+                   "ERR10181254_1.fastq.gz"] == "735252236e07db9324a1a95112b237e9"
+        assert md5["https://ftp.sra.ebi.ac.uk/vol1/fastq/ERR101/054/ERR10181254/"
+                   "ERR10181254_2.fastq.gz"] == "b3c6d69a99c420b3385970bf82af1fde"
+        sheet_urls = {u for r in csv.DictReader((tmp_path / "samplesheet.csv").open())
+                      for u in (r["fastq_1"], r["fastq_2"]) if u}
+        assert sheet_urls == set(md5)
+
+    def test_demo_download_script_verifies_every_file(self, tmp_path):
+        import ena_fetch as app
+
+        app.main(["--demo", "--output", str(tmp_path)])
+        body = (tmp_path / "download_ena.sh").read_text()
+        checks = [ln for ln in body.splitlines() if ln.startswith("verify_md5 ")]
+        downloads = [ln for ln in body.splitlines() if ln.startswith("curl -fsSL")]
+        assert len(checks) == len(downloads) > 0
+        assert ('verify_md5 735252236e07db9324a1a95112b237e9 '
+                '"$OUTDIR"/ERR10181254_1.fastq.gz') in checks
+
+    def test_local_path_samplesheets_write_no_md5_sidecar(self, tmp_path):
+        """With --fastq-dir the sheet holds local paths, nothing to verify."""
+        import ena_fetch as app
+
+        app.main(["--demo", "--command", "samplesheet", "--assay", "bulk",
+                  "--fastq-dir", "/data/fastq", "--output", str(tmp_path)])
+        assert not (tmp_path / "fastq_md5.tsv").exists()
+
 
 class TestCLI:
     def test_no_args_exits_nonzero(self):

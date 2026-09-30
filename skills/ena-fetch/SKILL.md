@@ -278,6 +278,7 @@ output_directory/
 ├── report.md              # Commands run and what each returned
 ├── result.json            # Machine-readable envelope
 ├── samplesheet.csv        # Pipeline-ready nf-core samplesheet
+├── fastq_md5.tsv          # (optional) archive MD5 per URL; URL sheets only
 ├── download_ena.sh        # Runnable bash + SLURM download script
 ├── tables/
 │   └── metadata.tsv       # Standardised sample x run table
@@ -318,7 +319,11 @@ download script; `sbatch` if it is submitted rather than run.
   a ClawBio skill — do not promise a skill that does not exist.
 - **Gotcha 5**: `download-script` **writes a script and downloads nothing**.
   Never run or submit it without telling the user the file count and total size
-  first, and never treat one approval as covering a later run.
+  first, and never treat one approval as covering a later run. The script
+  checks every file against ENA's `fastq_md5` (from `fastq_md5.tsv`, written
+  by `samplesheet`) and stops on a mismatch. You will want to re-run it to
+  "resume" past that error. Do not. A resumed transfer of a corrupt file is
+  still corrupt: delete the named file first.
 - **Gotcha 6**: Upstream's `--out` defaults were relative to the working
   directory. Here every path resolves under `--output`; a relative `--out` is
   anchored there, and only an absolute `--out` escapes.

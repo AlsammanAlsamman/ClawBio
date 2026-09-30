@@ -16,6 +16,7 @@ import pytest
 from clawbio.common.download_script import (
     SlurmOptions,
     build_download_script,
+    read_md5_sidecar,
     urls_from_samplesheet,
     urls_from_url_list,
     write_download_script,
@@ -252,3 +253,62 @@ class TestShellInjection:
             [("s1", ["https://x/..", "https://x/.", "https://x/ok.fq.gz"])], tool=tool)
         assert n == 1
         assert "ok.fq.gz" in body
+
+
+DATA_MD5 = "8d777f385d3dfec8815d20f7496026dc"  # md5 of b"data", the shim's default content
+
+
+@pytest.mark.parametrize("tool", ["curl", "wget"])
+class TestMd5Verification:
+    """ENA publishes fastq_md5; `curl -C -` / `wget -c` can exit 0 on a truncated
+    or stale file, so the checksum is the only proof a file is complete."""
+
+    def _script(self, tmp_path, tool, md5):
+        script = tmp_path / "dl.sh"
+        write_download_script([("s1", ["https://x/1.fq.gz"])], script, tool=tool, md5=md5)
+        return script
+
+    def test_a_matching_file_passes(self, tmp_path, tool):
+        script = self._script(tmp_path, tool, {"https://x/1.fq.gz": DATA_MD5})
+        result, _ = run_with_shims(script, tmp_path)
+        assert result.returncode == 0, result.stderr
+
+    def test_a_truncated_file_fails_the_script(self, tmp_path, tool):
+        script = self._script(tmp_path, tool, {"https://x/1.fq.gz": DATA_MD5})
+        result, _ = run_with_shims(script, tmp_path, content="dat")
+        assert result.returncode != 0
+        assert "MD5 mismatch" in result.stderr
+        assert "delete it and re-run" in result.stderr
+
+    def test_a_malformed_checksum_is_never_embedded(self, tmp_path, tool):
+        body, _ = build_download_script(
+            [("s1", ["https://x/1.fq.gz"])], tool=tool,
+            md5={"https://x/1.fq.gz": "$(touch PWNED)"})
+        assert "PWNED" not in body
+        assert "verify_md5 " not in body.replace("verify_md5() ", "")
+
+    def test_only_files_with_a_checksum_are_verified(self, tmp_path, tool):
+        body, _ = build_download_script(
+            [("s1", ["https://x/1.fq.gz", "https://x/2.fq.gz"])], tool=tool,
+            md5={"https://x/1.fq.gz": DATA_MD5.upper()})
+        checks = [ln for ln in body.splitlines() if ln.startswith("verify_md5 ")]
+        assert checks == [f'verify_md5 {DATA_MD5} "$OUTDIR"/1.fq.gz']
+
+    def test_no_checksums_means_no_verification_block(self, tmp_path, tool):
+        body, _ = build_download_script([("s1", ["https://x/1.fq.gz"])], tool=tool)
+        assert "md5sum" not in body
+
+
+class TestMd5Sidecar:
+    def test_reads_url_tab_md5_rows(self, tmp_path):
+        path = tmp_path / "fastq_md5.tsv"
+        path.write_text(f"url\tmd5\nhttps://x/1.fq.gz\t{DATA_MD5}\n")
+        assert read_md5_sidecar(path) == {"https://x/1.fq.gz": DATA_MD5}
+
+    def test_drops_malformed_rows(self, tmp_path):
+        path = tmp_path / "fastq_md5.tsv"
+        path.write_text("url\tmd5\nhttps://x/1.fq.gz\tnot-a-hash\nonly-one-field\n")
+        assert read_md5_sidecar(path) == {}
+
+    def test_a_missing_sidecar_is_no_checksums(self, tmp_path):
+        assert read_md5_sidecar(tmp_path / "absent.tsv") == {}

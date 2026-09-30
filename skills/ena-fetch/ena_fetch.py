@@ -30,7 +30,9 @@ for _p in (str(_PROJECT_ROOT), str(_SKILL_DIR)):
 
 from clawbio.common import archive_fetch as af  # noqa: E402
 from clawbio.common.download_script import (  # noqa: E402
+    MD5_SIDECAR,
     SlurmOptions,
+    read_md5_sidecar,
     urls_from_samplesheet,
     write_download_script,
 )
@@ -160,7 +162,8 @@ def _run_download_script(args, output_dir: Path) -> str:
         cpus=args.cpus, mem=args.mem, time=args.time, email=args.email)
     path, n = write_download_script(
         urls_from_samplesheet(sheet), output_dir / "download_ena.sh",
-        tool=args.tool, outdir="fastq", slurm=slurm)
+        tool=args.tool, outdir="fastq", slurm=slurm,
+        md5=read_md5_sidecar(sheet.with_name(MD5_SIDECAR)))
     return (f"Wrote {path.name}: {n} download command(s) using {args.tool}.\n"
             "Nothing has been downloaded. Run it yourself with "
             f"`bash {path.name}`, or submit it with `sbatch {path.name}`.")
@@ -322,7 +325,7 @@ def main(argv: list[str] | None = None) -> int:
         sections=sections,
     )
     written = [report]
-    for rel in ("tables/metadata.tsv", "samplesheet.csv", "download_ena.sh"):
+    for rel in ("tables/metadata.tsv", "samplesheet.csv", "fastq_md5.tsv", "download_ena.sh"):
         if (output_dir / rel).exists():
             written.append(output_dir / rel)
 

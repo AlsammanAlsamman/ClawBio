@@ -121,6 +121,58 @@ def urls_from_url_list(path: Path | str) -> Groups:
     return out
 
 
+_MD5_RE = re.compile(r"^[0-9a-f]{32}$")
+
+# Written by `ena-fetch --command samplesheet` next to samplesheet.csv: the
+# archive's checksum for each URL, which the nf-core samplesheet has no column for.
+MD5_SIDECAR = "fastq_md5.tsv"
+
+
+def read_md5_sidecar(path: Path | str) -> dict[str, str]:
+    """Return {url: md5} from a `url<TAB>md5` sidecar; malformed rows are dropped."""
+    path = Path(path)
+    if not path.exists():
+        return {}
+    out = {}
+    with path.open(newline="") as fh:
+        for row in csv.DictReader(fh, delimiter="\t"):
+            url, md5 = (row.get("url") or "").strip(), (row.get("md5") or "").strip().lower()
+            if url and _MD5_RE.match(md5):
+                out[url] = md5
+    return out
+
+
+def write_md5_sidecar(md5: dict[str, str], path: Path | str) -> Path:
+    """Write {url: md5} as the `url<TAB>md5` sidecar `read_md5_sidecar` reads."""
+    path = Path(path)
+    with path.open("w", newline="") as fh:
+        w = csv.writer(fh, delimiter="\t", lineterminator="\n")
+        w.writerow(["url", "md5"])
+        for url, value in md5.items():
+            w.writerow([url, value])
+    return path
+
+
+# `curl -C -` and `wget -c` both exit 0 on a file that is already as long as the
+# server says, and a resumed transfer can splice a stale partial onto new bytes.
+# The archive's MD5 is the only proof the file on disk is the one published.
+# md5sum is coreutils, so on every Linux compute node; where it is missing the
+# script says so rather than failing a download that may be fine.
+MD5_PROBE = """# Verify each file against the archive's published MD5 once it is complete.
+if command -v md5sum >/dev/null 2>&1; then
+  verify_md5() {
+    printf '%s  %s\\n' "$1" "$2" | md5sum -c --quiet - >/dev/null 2>&1 || {
+      echo "MD5 mismatch for $2: the file is truncated or corrupt; delete it and re-run this script" >&2
+      exit 1
+    }
+  }
+else
+  echo "warning: md5sum not found; downloaded files will not be checksum-verified" >&2
+  verify_md5() { :; }
+fi
+"""
+
+
 # --- transfer robustness defaults ---
 # These scripts fetch multi-gigabyte archive files, usually unattended on a
 # compute node. The failure that matters is not "the URL was wrong" but "the
@@ -223,13 +275,23 @@ def build_download_script(
     tool: str = "curl",
     outdir: str = "fastq",
     slurm: SlurmOptions | None = None,
+    md5: dict[str, str] | None = None,
 ) -> tuple[str, int]:
-    """Render the script body. `slurm=None` omits the SLURM header entirely."""
+    """Render the script body. `slurm=None` omits the SLURM header entirely.
+
+    `md5` maps a URL to the archive's checksum; each file that has one is
+    verified straight after its download. Anything that is not 32 hex digits
+    is ignored, so no checksum value can carry shell syntax into the script.
+    """
+    checksums = {u: v.lower() for u, v in (md5 or {}).items()
+                 if _MD5_RE.match((v or "").lower())}
     parts = [_slurm_header(slurm), ""] if slurm is not None else ["#!/bin/bash"]
     parts += ["set -euo pipefail", "", f"OUTDIR={shlex.quote(outdir)}",
               'mkdir -p "$OUTDIR"', ""]
     if tool == "curl":
         parts += [CURL_PROBE]
+    if any(u in checksums for _, urls in groups for u in urls):
+        parts += [MD5_PROBE]
     n_files = 0
     for sample, urls in groups:
         parts.append(f"# sample: {_safe_field(sample)}")
@@ -240,6 +302,8 @@ def build_download_script(
                       file=sys.stderr)
                 continue
             parts.append(_download_cmd(tool, url, name))
+            if url in checksums:
+                parts.append(f'verify_md5 {checksums[url]} "$OUTDIR"/{shlex.quote(name)}')
             n_files += 1
         parts.append("")
     parts += [f'echo "Downloaded {n_files} file(s) to $OUTDIR"', ""]
@@ -253,11 +317,13 @@ def write_download_script(
     tool: str = "curl",
     outdir: str = "fastq",
     slurm: SlurmOptions | None = None,
+    md5: dict[str, str] | None = None,
 ) -> tuple[Path, int]:
     """Write the script and mark it executable. Returns (path, file count)."""
     if not groups:
         raise SystemExit("No FASTQ URLs found in the input.")
-    body, n_files = build_download_script(groups, tool=tool, outdir=outdir, slurm=slurm)
+    body, n_files = build_download_script(groups, tool=tool, outdir=outdir,
+                                          slurm=slurm, md5=md5)
     if not n_files:
         raise SystemExit("No FASTQ URLs found in the input.")
     out_path = Path(out_path)

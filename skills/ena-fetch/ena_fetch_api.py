@@ -28,6 +28,8 @@ import time
 import urllib.parse
 import urllib.request
 
+from clawbio.common.download_script import MD5_SIDECAR, write_md5_sidecar
+
 PORTAL = "https://www.ebi.ac.uk/ena/portal/api"
 BROWSER = "https://www.ebi.ac.uk/ena/browser/api"
 USER_AGENT = "ena-skill/1.0"
@@ -310,6 +312,26 @@ def rows_from_ena_runs(runs, group_by="sample_accession", local_dir=None,
     return rows
 
 
+def md5_by_url(runs, urls):
+    """{https url: archive md5} for the given URLs.
+
+    ENA's fastq_md5 is ';'-aligned with fastq_ftp. A run whose two lists differ
+    in length is skipped rather than guessed at.
+    """
+    wanted = set(urls)
+    out = {}
+    for r in runs:
+        links = r.get("fastq_ftp", "").split(";")
+        sums = r.get("fastq_md5", "").split(";")
+        if len(links) != len(sums):
+            continue
+        for link, md5 in zip(links, sums):
+            url = to_https(link) if link else ""
+            if url in wanted and md5:
+                out[url] = md5
+    return out
+
+
 # ---- harmonized metadata.tsv (shared shape across skills) ----
 import html
 
@@ -458,7 +480,7 @@ def cmd_metadata_table(args):
 def cmd_samplesheet(args):
     read_map = check_fastq_opts(args)
     fields = ("run_accession,experiment_accession,sample_accession,sample_alias,"
-              "sample_title,library_layout,fastq_ftp")
+              "sample_title,library_layout,fastq_ftp,fastq_md5")
     text = portal_get(
         "filereport",
         {"accession": args.accession, "result": "read_run", "fields": fields,
@@ -475,6 +497,15 @@ def cmd_samplesheet(args):
                               read_map=read_map)
     finalize_sample_ids(rows)
     n = write_samplesheet(rows, args.out, args.assay, args.strandedness)
+    # The checksums the download script verifies against. Only a sheet of
+    # archive URLs has anything to verify; a local-path sheet drops any stale one.
+    sidecar = os.path.join(os.path.dirname(os.path.abspath(args.out)), MD5_SIDECAR)
+    urls = [u for r in rows for u in (r["fastq_1"], r["fastq_2"]) if u]
+    md5 = {} if (args.fastq_dir or args.local_dir) else md5_by_url(runs, urls)
+    if md5:
+        write_md5_sidecar(md5, sidecar)
+    elif os.path.exists(sidecar):
+        os.remove(sidecar)
     print(f"Wrote {n} row(s) for {len({r['sample'] for r in rows})} sample(s) to {args.out} "
           f"(nf-core/{'rnaseq' if args.assay == 'bulk' else 'scrnaseq'})", file=sys.stderr)
 
