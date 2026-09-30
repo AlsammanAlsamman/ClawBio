@@ -204,6 +204,34 @@ class TestSafety:
         app.main(["--demo", "--output", str(tmp_path / "out")])
         assert list(cwd.iterdir()) == []
 
+    @pytest.mark.parametrize("tool", ["curl", "wget"])
+    def test_download_script_passes_hostile_names_literally(self, tmp_path, tool):
+        """PRIDE keeps its own emitter, so the shell-quoting fix is tested here too:
+        a file name with `$(...)` or backticks must reach curl/wget/unzip as text."""
+        import pride_fetch_api as api
+        from clawbio.common.tests.shims import run_with_shims
+
+        names = ["a$(touch PWNED_SUBST).raw", "b`touch PWNED_TICK`.zip"]
+        recs = [{"publicFileLocations": [
+            {"name": "FTP Protocol", "value": f"ftp://ftp.pride.ebi.ac.uk/p/{n}"}]}
+            for n in names]
+        script = tmp_path / "dl.sh"
+        args = api.argparse.Namespace(
+            accession="PXD0", ext=None, tool=tool, outdir="pride $(touch PWNED_OUT)",
+            out=str(script), unzip=True, no_slurm=True)
+        with patch.object(api, "iter_files", return_value=recs):
+            api.cmd_download_script(args)
+
+        result, calls = run_with_shims(script, tmp_path)
+        assert result.returncode == 0, result.stderr
+        assert not list(tmp_path.glob("PWNED*"))
+        transfers = [c for c in calls if "--help" not in c and c[:2] != ["-q", "-o"]]
+        assert [c[-1] for c in transfers] == [
+            f"https://ftp.pride.ebi.ac.uk/p/{n}" for n in names]
+        unzip = [c for c in calls if c[:2] == ["-q", "-o"]]
+        assert unzip == [["-q", "-o", f"pride $(touch PWNED_OUT)/{names[1]}",
+                          "-d", "pride $(touch PWNED_OUT)"]]
+
     def test_report_holds_no_absolute_output_path(self, tmp_path):
         import pride_fetch as app
 

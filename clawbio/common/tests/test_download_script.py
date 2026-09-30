@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import csv
 import stat
+import subprocess
 
 import pytest
 
@@ -19,6 +20,7 @@ from clawbio.common.download_script import (
     urls_from_url_list,
     write_download_script,
 )
+from clawbio.common.tests.shims import run_with_shims
 
 
 def _samplesheet(tmp_path, rows, header=("sample", "fastq_1", "fastq_2")):
@@ -51,7 +53,7 @@ class TestSamplesheetParsing:
         assert urls_from_samplesheet(sheet) == [("s1", ["https://x/1_2.fq.gz"])]
 
     def test_skips_a_url_carrying_a_quote_or_control_character(self, tmp_path):
-        """The URL is interpolated into double quotes in bash; a quote escapes them."""
+        """Neither belongs in a URL; a control character would also split the line."""
         sheet = _samplesheet(tmp_path, [["s1", 'https://x/a".fq.gz', "https://x/ok.fq.gz"]])
         assert urls_from_samplesheet(sheet) == [("s1", ["https://x/ok.fq.gz"])]
 
@@ -185,3 +187,68 @@ class TestWrite:
     def test_refuses_to_write_an_empty_script(self, tmp_path):
         with pytest.raises(SystemExit, match="No FASTQ URLs"):
             write_download_script([], tmp_path / "x.sh", tool="wget")
+
+    def test_refuses_when_every_url_was_skipped(self, tmp_path):
+        with pytest.raises(SystemExit, match="No FASTQ URLs"):
+            write_download_script([("s1", ["https://x/.."])], tmp_path / "x.sh")
+
+
+# Values bash would expand inside double quotes. SDRF Comment[FASTQ_URI] cells
+# are submitter free text and reach these scripts via ena-fetch, so a URL is
+# not trusted input.
+HOSTILE_URLS = [
+    "https://x/a$(touch PWNED_SUBST).fq.gz",
+    "https://x/b`touch PWNED_TICK`.fq.gz",
+    "https://x/c${HOME}.fq.gz",
+    "https://x/d\\$HOME.fq.gz",
+    "https://x/e.fq.gz?x=1&y=a+b;touch PWNED_SEMI",
+]
+
+
+def _transfers(calls):
+    """The download calls, without curl's --help probe."""
+    return [c for c in calls if "--help" not in c]
+
+
+@pytest.mark.parametrize("tool", ["curl", "wget"])
+class TestShellInjection:
+    """A generated script must pass every value to the tool literally."""
+
+    def _run(self, tmp_path, urls, tool, outdir="fastq"):
+        script = tmp_path / "dl.sh"
+        write_download_script([("s1", urls)], script, tool=tool, outdir=outdir)
+        return run_with_shims(script, tmp_path)
+
+    def test_no_url_can_run_a_command(self, tmp_path, tool):
+        result, _ = self._run(tmp_path, HOSTILE_URLS, tool)
+        assert result.returncode == 0, result.stderr
+        assert not list(tmp_path.glob("PWNED*"))
+
+    def test_each_url_reaches_the_tool_byte_for_byte(self, tmp_path, tool):
+        _, calls = self._run(tmp_path, HOSTILE_URLS, tool)
+        transfers = _transfers(calls)
+        assert [c[-1] for c in transfers] == HOSTILE_URLS
+
+    def test_destination_names_are_literal(self, tmp_path, tool):
+        self._run(tmp_path, HOSTILE_URLS[:2], tool)
+        names = sorted(p.name for p in (tmp_path / "fastq").iterdir())
+        assert names == ["a$(touch PWNED_SUBST).fq.gz", "b`touch PWNED_TICK`.fq.gz"]
+
+    def test_outdir_is_quoted_too(self, tmp_path, tool):
+        outdir = "my dir $(touch PWNED_OUT)"
+        result, _ = self._run(tmp_path, ["https://x/1.fq.gz"], tool, outdir=outdir)
+        assert result.returncode == 0, result.stderr
+        assert (tmp_path / outdir / "1.fq.gz").exists()
+        assert not list(tmp_path.glob("PWNED*"))
+
+    def test_script_parses(self, tmp_path, tool):
+        script = tmp_path / "dl.sh"
+        write_download_script([("s1", HOSTILE_URLS)], script, tool=tool)
+        assert subprocess.run(["bash", "-n", str(script)]).returncode == 0
+
+    def test_a_name_that_is_a_dot_segment_is_skipped(self, tmp_path, tool):
+        """`https://x/..` would make the destination `$OUTDIR/..` itself."""
+        body, n = build_download_script(
+            [("s1", ["https://x/..", "https://x/.", "https://x/ok.fq.gz"])], tool=tool)
+        assert n == 1
+        assert "ok.fq.gz" in body

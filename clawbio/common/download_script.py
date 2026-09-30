@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import csv
 import re
+import shlex
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,9 +37,25 @@ def _safe_field(value: str | None) -> str:
     return re.sub(r" +", " ", _CTRL_RE.sub("_", value or "")).strip()
 
 
-def _is_safe_url(url: str) -> bool:
-    """Reject anything that would break out of the double quotes in bash."""
+def is_safe_url(url: str) -> bool:
+    """Reject control characters and double quotes, neither of which belongs in
+    a URL; a control character would also split the command across lines.
+
+    This is not what keeps the script safe. Every value is `shlex.quote`d when it
+    is written (see `_download_cmd`), so `$(...)`, backticks and `${...}` reach
+    the transfer tool literally. SDRF `Comment[FASTQ_URI]` cells are submitter
+    free text, so a URL is never trusted input.
+    """
     return not (_CTRL_RE.search(url) or '"' in url)
+
+
+def dest_name(url: str) -> str | None:
+    """File name a URL downloads to, or None when it is not a usable name.
+
+    `.` and `..` are refused: `$OUTDIR/..` would write into the parent directory.
+    """
+    name = _safe_field(url.rstrip("/").split("/")[-1])
+    return None if name in ("", ".", "..") else name
 
 
 @dataclass
@@ -78,7 +95,7 @@ def urls_from_samplesheet(path: Path | str) -> Groups:
                     print(f"warning: skipping non-URL value in {col}: {value}",
                           file=sys.stderr)
                     continue
-                if not _is_safe_url(value):
+                if not is_safe_url(value):
                     print(f"warning: skipping unsafe URL in {col}: {value!r}",
                           file=sys.stderr)
                     continue
@@ -97,7 +114,7 @@ def urls_from_url_list(path: Path | str) -> Groups:
             continue
         if not (url.startswith("http") or url.startswith("ftp")):
             continue
-        if not _is_safe_url(url):
+        if not is_safe_url(url):
             print(f"warning: skipping unsafe URL: {url!r}", file=sys.stderr)
             continue
         out.append((f"file{i + 1}", [url]))
@@ -135,9 +152,12 @@ fi
 """
 
 
-def _download_cmd(tool: str, url: str, outdir: str) -> str:
-    name = _safe_field(url.rstrip("/").split("/")[-1])
-    dest = f'"{outdir}/{name}"'
+def _download_cmd(tool: str, url: str, name: str) -> str:
+    # Single-quoted by shlex, so bash expands nothing in the URL or the name.
+    # "$OUTDIR" is the one expansion wanted, and its value is quoted where it
+    # is assigned.
+    dest = f'"$OUTDIR"/{shlex.quote(name)}'
+    url = shlex.quote(url)
     if tool == "curl":
         # -f fail on HTTP errors, -s silent (no progress bar), -S still show
         # errors, -L follow redirects (BioStudies' file route 302s), --retry
@@ -149,7 +169,7 @@ def _download_cmd(tool: str, url: str, outdir: str) -> str:
         return (f'curl -fsSL --retry {RETRIES} --retry-delay {RETRY_DELAY} '
                 f'$RETRY_ALL --connect-timeout {CONNECT_TIMEOUT} '
                 f'--speed-limit {STALL_BYTES} --speed-time {STALL_SECONDS} '
-                f'-C - --create-dirs -o {dest} "{url}"')
+                f'-C - --create-dirs -o {dest} {url}')
     # wget: -q fully quiet, --tries/--waitretry for transient failures,
     # --timeout bounds both the connect and the read, -O the explicit output
     # path, and -c to resume.
@@ -169,7 +189,7 @@ def _download_cmd(tool: str, url: str, outdir: str) -> str:
     # retry within one run is already wget's default. That is exactly the
     # resubmitted-job case these scripts are written for.
     return (f'wget -q --tries={RETRIES} --waitretry={RETRY_DELAY} '
-            f'--timeout={CONNECT_TIMEOUT} -c -O {dest} "{url}"')
+            f'--timeout={CONNECT_TIMEOUT} -c -O {dest} {url}')
 
 
 def _slurm_header(opts: SlurmOptions) -> str:
@@ -206,14 +226,20 @@ def build_download_script(
 ) -> tuple[str, int]:
     """Render the script body. `slurm=None` omits the SLURM header entirely."""
     parts = [_slurm_header(slurm), ""] if slurm is not None else ["#!/bin/bash"]
-    parts += ["set -euo pipefail", "", f'OUTDIR="{outdir}"', 'mkdir -p "$OUTDIR"', ""]
+    parts += ["set -euo pipefail", "", f"OUTDIR={shlex.quote(outdir)}",
+              'mkdir -p "$OUTDIR"', ""]
     if tool == "curl":
         parts += [CURL_PROBE]
     n_files = 0
     for sample, urls in groups:
         parts.append(f"# sample: {_safe_field(sample)}")
         for url in urls:
-            parts.append(_download_cmd(tool, url, "$OUTDIR"))
+            name = dest_name(url)
+            if name is None:
+                print(f"warning: skipping URL with no file name: {url!r}",
+                      file=sys.stderr)
+                continue
+            parts.append(_download_cmd(tool, url, name))
             n_files += 1
         parts.append("")
     parts += [f'echo "Downloaded {n_files} file(s) to $OUTDIR"', ""]
@@ -232,6 +258,8 @@ def write_download_script(
     if not groups:
         raise SystemExit("No FASTQ URLs found in the input.")
     body, n_files = build_download_script(groups, tool=tool, outdir=outdir, slurm=slurm)
+    if not n_files:
+        raise SystemExit("No FASTQ URLs found in the input.")
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(body, encoding="utf-8")

@@ -28,6 +28,7 @@ import io
 import json
 import os
 import re
+import shlex
 import sys
 import time
 import urllib.parse
@@ -235,12 +236,15 @@ def _safe_field(v):
 # because it is file-list driven and supports --unzip.
 from clawbio.common.download_script import (  # noqa: E402
     CONNECT_TIMEOUT, CURL_PROBE, RETRIES, RETRY_DELAY, STALL_BYTES, STALL_SECONDS,
+    is_safe_url, dest_name,
 )
 
 
-def _dl_cmd(tool, url, outdir):
-    name = _safe_field(url.rstrip("/").split("/")[-1])
-    dest = f'"{outdir}/{name}"'
+def _dl_cmd(tool, url, name):
+    # Single-quoted by shlex, so bash expands nothing in the URL or the name;
+    # "$OUTDIR" is the one expansion wanted, and it is quoted where assigned.
+    dest = f'"$OUTDIR"/{shlex.quote(name)}'
+    url = shlex.quote(url)
     if tool == "curl":
         # -f fail on HTTP errors, -sS quiet but still report errors, -L follow
         # redirects, --retry with a delay, --connect-timeout plus the
@@ -250,14 +254,14 @@ def _dl_cmd(tool, url, outdir):
         return (f'curl -fsSL --retry {RETRIES} --retry-delay {RETRY_DELAY} '
                 f'$RETRY_ALL --connect-timeout {CONNECT_TIMEOUT} '
                 f'--speed-limit {STALL_BYTES} --speed-time {STALL_SECONDS} '
-                f'-C - --create-dirs -o {dest} "{url}"')
+                f'-C - --create-dirs -o {dest} {url}')
     # wget: -q fully quiet, -c to resume. Verified against GNU Wget 1.25.0 on
     # 2026-09-22, re-verified 2026-09-23, that -c with -O resumes (206 Partial
     # Content) rather than restarting. NOT -nc, which is --no-clobber and would
     # skip an existing partial file instead of finishing it. Proteomics RAW
     # files run to tens of GB, so resume matters most here.
     return (f'wget -q --tries={RETRIES} --waitretry={RETRY_DELAY} '
-            f'--timeout={CONNECT_TIMEOUT} -c -O {dest} "{url}"')
+            f'--timeout={CONNECT_TIMEOUT} -c -O {dest} {url}')
 
 
 def _slurm_header(args):
@@ -300,11 +304,12 @@ def cmd_download_script(args):
         if not url:
             continue
         url = _https(url)
-        if _CTRL_RE.search(url) or '"' in url:  # never embed an unsafe URL in the shell
+        name = dest_name(url)
+        if not is_safe_url(url) or name is None:
             print(f"warning: skipping file with an unsafe URL: {url!r}", file=sys.stderr)
             continue
         cat = (f.get("fileCategory") or {}).get("value", "")
-        entries.append((_safe_field(_fname(f)), url, _safe_field(cat)))
+        entries.append((name, url, _safe_field(cat)))
     if not entries:
         raise SystemExit("No matching files for this project (check --ext).")
 
@@ -314,7 +319,8 @@ def cmd_download_script(args):
         parts.append("")
     else:
         parts.append("#!/bin/bash")
-    parts += ["set -euo pipefail", "", f'OUTDIR="{args.outdir}"', 'mkdir -p "$OUTDIR"', ""]
+    parts += ["set -euo pipefail", "", f"OUTDIR={shlex.quote(args.outdir)}",
+              'mkdir -p "$OUTDIR"', ""]
     if args.tool == "curl":
         # Required: _dl_cmd references $RETRY_ALL, and `set -u` makes an
         # unbound variable a hard error.
@@ -322,9 +328,9 @@ def cmd_download_script(args):
     n_zip = 0
     for name, url, cat in entries:
         parts.append(f"# {cat or 'file'}: {name}")
-        parts.append(_dl_cmd(args.tool, url, "$OUTDIR"))
+        parts.append(_dl_cmd(args.tool, url, name))
         if args.unzip and name.lower().endswith(".zip"):
-            parts.append(f'unzip -q -o "$OUTDIR/{name}" -d "$OUTDIR"')
+            parts.append(f'unzip -q -o "$OUTDIR"/{shlex.quote(name)} -d "$OUTDIR"')
             n_zip += 1
         parts.append("")
     parts.append(f'echo "Downloaded {len(entries)} file(s) to $OUTDIR"')
