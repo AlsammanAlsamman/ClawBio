@@ -1062,7 +1062,7 @@ SKILLS = {
             "--fastq-naming", "--read-map",
         },
         "allowed_extra_flags_without_values": {
-            "--magetab", "--processed", "--raw", "--no-slurm",
+            "--magetab", "--processed", "--raw",
         },
         "no_input_required": True,
         "accepts_genotypes": False,

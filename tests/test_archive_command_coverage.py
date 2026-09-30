@@ -153,3 +153,19 @@ def test_search_still_defaults_to_twenty_hits(skill, tmp_path):
     assert "--limit" in argv, f"{skill} search sends no --limit"
     assert argv[argv.index("--limit") + 1] == "20", (
         f"{skill} search default changed; the sentinel must not alter search")
+
+
+@pytest.mark.parametrize("skill", SKILLS)
+def test_every_runner_allowlisted_flag_exists_on_the_skill(skill):
+    """`clawbio.py run` forwards only allowlisted flags (INT-001). A flag on the
+    list that the skill's parser lacks passes the runner and then dies in
+    argparse, so the allowlist would be advertising something that cannot work."""
+    from clawbio.cli import SKILLS as RUNNER
+
+    app = _load_entry_point(skill)
+    known = set(app._build_parser()._option_string_actions)
+    entry = RUNNER[skill]
+    allowed = set(entry.get("allowed_extra_flags", ())) | set(
+        entry.get("allowed_extra_flags_without_values", ()))
+    missing = sorted(allowed - known)
+    assert not missing, f"clawbio/cli.py allowlists {missing} for {skill}, which its parser lacks"
