@@ -240,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
     ))
 
     af.write_bundle(output_dir, script=Path(__file__).resolve(),
-                    env_name="clawbio-geo-fetch", command=commands[0], written=written)
+                    env_name="clawbio-geo-fetch", argv=argv, written=written)
     print(f"Wrote {len(written)} artifact(s) to {output_dir}", file=sys.stderr)
     return 0
 

@@ -184,14 +184,39 @@ def write_report(output_dir: Path, *, title: str, source_url: str,
     return path
 
 
+def replay_argv(argv: list[str], output_dir: Path) -> list[str]:
+    """The argv a run was given, with `--output` pointed at the resolved dir.
+
+    Everything else is kept as typed, so the recorded command is the one that
+    ran: the accession, every flag, `--demo`. `--out` is a different option and
+    is left alone.
+    """
+    kept, skip = [], False
+    for token in argv:
+        if skip:
+            skip = False
+            continue
+        if token == "--output":
+            skip = True
+            continue
+        if token.startswith("--output="):
+            continue
+        kept.append(token)
+    return [*kept, "--output", str(output_dir)]
+
+
 def write_bundle(output_dir: Path, *, script: Path, env_name: str,
-                 command: str, written: list[Path]) -> None:
+                 argv: list[str], written: list[Path]) -> None:
     """Write reproducibility/ through the shared helpers.
+
+    `argv` is what the entry point parsed. commands.sh replays it verbatim
+    (only `--output` is re-anchored), so running it repeats this run rather
+    than a summary of it.
 
     Never hand-roll these: the bundle layout, line endings and checksum format
     have to match every other ClawBio skill.
     """
-    cmd = ["python", str(script), "--command", command, "--output", str(output_dir)]
+    cmd = ["python", str(script), *replay_argv(argv, output_dir)]
     commands_sh = write_commands_sh(output_dir, shlex.join(cmd))
     environment_yml = write_environment_yml(
         output_dir, env_name,

@@ -91,3 +91,32 @@ class TestSafeJoin:
         (base / "link").symlink_to(outside)
         with pytest.raises(SystemExit, match="outside"):
             af.safe_join(base, "link/x.txt")
+
+
+class TestReplayArgv:
+    """commands.sh must hold the command that was run, not a summary of it."""
+
+    def test_every_flag_is_kept_and_output_is_re_anchored(self, tmp_path):
+        argv = ["--command", "download", "--accession", "GSE1", "--suppl",
+                "--output", "rel/out"]
+        assert af.replay_argv(argv, tmp_path) == [
+            "--command", "download", "--accession", "GSE1", "--suppl",
+            "--output", str(tmp_path)]
+
+    def test_the_equals_form_of_output_is_replaced_too(self, tmp_path):
+        assert af.replay_argv(["--demo", "--output=x"], tmp_path) == [
+            "--demo", "--output", str(tmp_path)]
+
+    def test_out_is_not_mistaken_for_output(self, tmp_path):
+        argv = ["--command", "samplesheet", "--out", "s.csv", "--output", "o"]
+        assert af.replay_argv(argv, tmp_path) == [
+            "--command", "samplesheet", "--out", "s.csv", "--output", str(tmp_path)]
+
+    def test_write_bundle_records_the_replay_command(self, tmp_path):
+        script = tmp_path / "skill.py"
+        af.write_bundle(tmp_path, script=script, env_name="e",
+                        argv=["--command", "runs", "--accession", "PRJ 1", "--output", "o"],
+                        written=[])
+        line = (tmp_path / "reproducibility" / "commands.sh").read_text().splitlines()[1]
+        assert line == (f"python {script} --command runs --accession 'PRJ 1' "
+                        f"--output {tmp_path}")
