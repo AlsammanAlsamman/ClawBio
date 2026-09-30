@@ -185,6 +185,64 @@ class TestCLI:
                       "--output", str(tmp_path)])
 
 
+class _ChunkedResponse:
+    """Serves a body in pieces and refuses a whole-body read()."""
+
+    def __init__(self, body, chunk=4):
+        self._body, self._chunk, self._pos = body, chunk, 0
+
+    def read(self, n=-1):
+        if n is None or n < 0:
+            raise AssertionError("download() must stream, not read() the whole body")
+        piece = self._body[self._pos:self._pos + n]
+        self._pos += len(piece)
+        return piece
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class TestDownloadStreams:
+    """Supplementary files run to many GB; the other four skills already stream."""
+
+    def test_download_streams_to_disk(self, tmp_path):
+        import geo_fetch_api as api
+
+        body = b"x" * 10_000
+        with patch.object(api.urllib.request, "urlopen", return_value=_ChunkedResponse(body)):
+            dest = api.download("https://ftp.ncbi.nlm.nih.gov/geo/series/GSE1nnn/GSE1/suppl/a.tar",
+                                str(tmp_path))
+        assert Path(dest).read_bytes() == body
+        assert not list(tmp_path.glob("*.part"))
+
+    def test_download_retries_a_failed_attempt(self, tmp_path):
+        import geo_fetch_api as api
+
+        responses = [OSError("reset"), _ChunkedResponse(b"ok")]
+
+        def flaky(*a, **k):
+            r = responses.pop(0)
+            if isinstance(r, Exception):
+                raise r
+            return r
+
+        with patch.object(api.urllib.request, "urlopen", side_effect=flaky), \
+                patch.object(api.time, "sleep"):
+            dest = api.download("https://ftp.ncbi.nlm.nih.gov/x/b.txt", str(tmp_path))
+        assert Path(dest).read_bytes() == b"ok"
+
+    def test_download_refuses_a_dot_dot_name(self, tmp_path):
+        import geo_fetch_api as api
+
+        with patch.object(api.urllib.request, "urlopen",
+                          side_effect=AssertionError("must refuse before any request")):
+            with pytest.raises(SystemExit, match="outside"):
+                api.download("https://ftp.ncbi.nlm.nih.gov/x/..", str(tmp_path / "out"))
+
+
 class TestSafety:
     def test_warns_before_overwriting(self, tmp_path, capsys):
         import geo_fetch as app

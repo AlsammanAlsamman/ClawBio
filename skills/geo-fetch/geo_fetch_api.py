@@ -29,6 +29,8 @@ import time
 import urllib.parse
 import urllib.request
 
+from clawbio.common.archive_fetch import safe_join
+
 EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 FTP_BASE = "https://ftp.ncbi.nlm.nih.gov/geo"
 USER_AGENT = "geo-skill/1.0 (https://www.ncbi.nlm.nih.gov/geo/)"
@@ -166,16 +168,35 @@ def cmd_files(args):
         print("No files found on GEO FTP for this accession.")
 
 
-def download(url, out_dir):
-    os.makedirs(out_dir, exist_ok=True)
+def download(url, out_dir, retries=3):
+    """Stream `url` into `out_dir` via a .part file, so a many-GB supplementary
+    archive never has to fit in memory and a failed attempt leaves no
+    truncated file under the final name."""
     name = url.rstrip("/").split("/")[-1]
-    dest = os.path.join(out_dir, name)
+    dest = str(safe_join(out_dir, name))
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
     print(f"  downloading {name} ...", file=sys.stderr)
-    data = http_get(url)
-    with open(dest, "wb") as fh:
-        fh.write(data)
-    print(f"  saved {dest} ({len(data)} bytes)", file=sys.stderr)
-    return dest
+    last = None
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            size = 0
+            with urllib.request.urlopen(req, timeout=600) as r, open(dest + ".part", "wb") as fh:
+                while True:
+                    chunk = r.read(1 << 20)
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    size += len(chunk)
+            os.replace(dest + ".part", dest)
+            print(f"  saved {dest} ({size} bytes)", file=sys.stderr)
+            return dest
+        except Exception as e:  # noqa: BLE001
+            last = e
+            time.sleep(1.5 * (attempt + 1))
+    if os.path.exists(dest + ".part"):
+        os.remove(dest + ".part")
+    raise SystemExit(f"GET failed for {url}: {last}")
 
 
 def cmd_download(args):
