@@ -342,6 +342,14 @@ download script; `sbatch` if it is submitted.
   NCBI — this skill reads run metadata from ENA. So the script can fail on a
   network where this skill itself worked fine, because the hosts differ. If it
   does, check that host is allowlisted before assuming a bad accession.
+- **Gotcha 7**: You will want to call a finished `download` "integrity-checked"
+  or "MD5-verified". Do not. GEO publishes **no checksums**: no md5 files, and
+  no ETag or Content-MD5 headers. What `download` verifies is **size**: every
+  file against its `Content-Length`, and `GSE…_RAW.tar` against the size in
+  `suppl/filelist.txt`. A short transfer is retried and then refused, and a
+  `filelist.txt` mismatch fails at once. Neither leaves a file under the final
+  name. Same-length corruption is not detectable. Say "size verified", which is
+  what the log prints.
 
 ## Safety
 

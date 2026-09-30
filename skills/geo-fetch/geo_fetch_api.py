@@ -168,12 +168,24 @@ def cmd_files(args):
         print("No files found on GEO FTP for this accession.")
 
 
-def download(url, out_dir, retries=3):
+class _ShortTransfer(Exception):
+    """Fewer bytes arrived than Content-Length announced: a dropped transfer,
+    usually transient, so the retry loop fetches again."""
+
+
+def download(url, out_dir, retries=3, expected_size=None):
     """Stream `url` into `out_dir` via a .part file, so a many-GB supplementary
     archive never has to fit in memory and a failed attempt leaves no
-    truncated file under the final name."""
+    truncated file under the final name.
+
+    GEO publishes no checksums (no md5 files, no ETag or Content-MD5), so the
+    size is what can be verified: against Content-Length on every file, and
+    against `expected_size` (from suppl/filelist.txt) when the caller has one.
+    That catches truncation, not corruption that keeps the length.
+    """
     name = url.rstrip("/").split("/")[-1]
     dest = str(safe_join(out_dir, name))
+    part = dest + ".part"
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     print(f"  downloading {name} ...", file=sys.stderr)
     last = None
@@ -181,22 +193,62 @@ def download(url, out_dir, retries=3):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
             size = 0
-            with urllib.request.urlopen(req, timeout=600) as r, open(dest + ".part", "wb") as fh:
+            with urllib.request.urlopen(req, timeout=600) as r, open(part, "wb") as fh:
+                try:
+                    announced = int(r.headers.get("Content-Length"))
+                except (TypeError, ValueError):
+                    announced = None
                 while True:
                     chunk = r.read(1 << 20)
                     if not chunk:
                         break
                     fh.write(chunk)
                     size += len(chunk)
-            os.replace(dest + ".part", dest)
-            print(f"  saved {dest} ({size} bytes)", file=sys.stderr)
+            if announced is not None and size != announced:
+                raise _ShortTransfer(
+                    f"size mismatch: got {size} of {announced} bytes (Content-Length)")
+            if expected_size is not None and size != expected_size:
+                # The server delivered what it announced, so fetching again
+                # would only repeat the disagreement; fail now.
+                os.remove(part)
+                raise SystemExit(
+                    f"size mismatch for {name}: got {size} bytes, but GEO's "
+                    f"suppl/filelist.txt lists {expected_size}. The archive disagrees "
+                    "with its own file list; nothing was saved.")
+            os.replace(part, dest)
+            if announced is None and expected_size is None:
+                print(f"  saved {dest} ({size} bytes; size could not be verified: "
+                      "no Content-Length)", file=sys.stderr)
+            else:
+                print(f"  saved {dest} ({size} bytes, size verified)", file=sys.stderr)
             return dest
         except Exception as e:  # noqa: BLE001
             last = e
             time.sleep(1.5 * (attempt + 1))
-    if os.path.exists(dest + ".part"):
-        os.remove(dest + ".part")
+    if os.path.exists(part):
+        os.remove(part)
     raise SystemExit(f"GET failed for {url}: {last}")
+
+
+def filelist_sizes(text):
+    """{archive name: size} from GEO's suppl/filelist.txt `Archive` rows.
+
+    Columns: `#Archive/File  Name  Time  Size  Type`. `File` rows describe the
+    members inside the tar, which are not downloaded separately. A row that
+    cannot be read is reported and skipped: the list only adds a check, so a
+    malformed one must never block the download.
+    """
+    sizes = {}
+    for line in text.splitlines():
+        cols = line.split("\t")
+        if cols[0] != "Archive":
+            continue
+        try:
+            sizes[cols[1]] = int(cols[3])
+        except (IndexError, ValueError):
+            print(f"warning: ignoring malformed suppl/filelist.txt row: {line!r}",
+                  file=sys.stderr)
+    return sizes
 
 
 def cmd_download(args):
@@ -219,8 +271,17 @@ def cmd_download(args):
         except SystemExit:
             print(f"[{sub}] not available", file=sys.stderr)
             continue
+        sizes = {}
+        if sub == "suppl" and "filelist.txt" in files:
+            try:
+                sizes = filelist_sizes(
+                    http_get(f"{base}/suppl/filelist.txt").decode("utf-8", "replace"))
+            except SystemExit as e:
+                print(f"warning: could not read suppl/filelist.txt ({e}); "
+                      "sizes are checked against Content-Length only", file=sys.stderr)
         for f in files:
-            download(f"{base}/{sub}/{f}", os.path.join(args.out, args.accession.upper(), sub))
+            download(f"{base}/{sub}/{f}", os.path.join(args.out, args.accession.upper(), sub),
+                     expected_size=sizes.get(f))
 
 
 # ---- nf-core/scrnaseq samplesheet ----
