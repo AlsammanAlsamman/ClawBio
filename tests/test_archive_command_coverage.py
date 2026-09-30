@@ -18,9 +18,11 @@ Two ways a command can be legitimately implemented:
 """
 from __future__ import annotations
 
+import argparse
 import contextlib
 import importlib.util
 import io
+import socket
 import sys
 from pathlib import Path
 
@@ -45,14 +47,54 @@ def _load_entry_point(skill: str):
     return module
 
 
+class _NetworkBlocked(BaseException):
+    """A BaseException, so the vendored `except Exception` retry loops cannot
+    swallow it and sleep before retrying."""
+
+
+class _Parsed(BaseException):
+    """Raised once argparse has resolved the subcommand, so no command runs."""
+
+
+@pytest.fixture
+def parse_only(monkeypatch):
+    """Stop the vendored `main()` straight after `parse_args` succeeds.
+
+    Reaching that point is the whole claim under test. Letting the command body
+    run as well made `ena-fetch fields`, which takes no arguments, query
+    ebi.ac.uk for real.
+    """
+    real = argparse.ArgumentParser.parse_args
+
+    def parse_then_stop(self, *args, **kwargs):
+        real(self, *args, **kwargs)
+        raise _Parsed
+
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", parse_then_stop)
+
+
+@pytest.fixture
+def no_network(monkeypatch):
+    """Record, and refuse, every outbound connection the test attempts."""
+    attempts = []
+
+    def refuse(self, address, *args, **kwargs):
+        attempts.append(address)
+        raise _NetworkBlocked(address)
+
+    monkeypatch.setattr(socket.socket, "connect", refuse)
+    return attempts
+
+
 @pytest.mark.parametrize("skill", SKILLS)
-def test_every_advertised_command_is_implemented(skill):
+def test_every_advertised_command_is_implemented(skill, parse_only, no_network):
     """`--command X` must never reach the vendored CLI as an unknown subcommand.
 
     Probing with the bare subcommand is enough: argparse resolves the subparser
     before it validates that subparser's own arguments, so a *known* command
-    fails with "the following arguments are required" and an *unknown* one
-    fails with "invalid choice". Neither reaches the network.
+    either parses or fails with "the following arguments are required", and an
+    *unknown* one fails with "invalid choice". `parse_only` stops a command that
+    parses before it runs; `no_network` proves that nothing reached the network.
     """
     app = _load_entry_point(skill)
     local = set(getattr(app, "LOCAL_COMMANDS", ()))
@@ -64,10 +106,14 @@ def test_every_advertised_command_is_implemented(skill):
         err = io.StringIO()
         with contextlib.redirect_stdout(io.StringIO()), \
                 contextlib.redirect_stderr(err), \
-                contextlib.suppress(SystemExit, Exception):
+                contextlib.suppress(SystemExit, _Parsed):
             app.api.main([cmd])
         if "invalid choice" in err.getvalue():
             unreachable.append(cmd)
+
+    assert not no_network, (
+        f"{skill}: probing COMMANDS attempted network connections {no_network}; "
+        "this suite must stay hermetic")
 
     assert not unreachable, (
         f"{skill} advertises {unreachable} in COMMANDS but the vendored CLI has "
