@@ -871,6 +871,9 @@ def test_confident_phenotype_accounts_for_every_detected_allele():
                    for (rsid, vdef), n in zip(variants, copies)}
             diplotype = call_diplotype(gene, pgx)
             phenotype = call_phenotype(gene, diplotype)
+            # Unmapped diplotypes are only asserted for DPYD in this test.
+            if gene == "DPYD" and phenotype.startswith("Unknown"):
+                failures.append((gene, copies, diplotype, phenotype))
             if phenotype.startswith(("Indeterminate", "Unknown")):
                 continue
             called = set(diplotype.split(" (")[0].split("/"))
@@ -890,3 +893,36 @@ def test_dpyd_compound_heterozygote_is_poor_metabolizer(rsids):
     variants = GENE_DEFS["DPYD"]["variants"]
     pgx = {r: {"genotype": (v["alt"] + "N") if r in rsids else "NN"} for r, v in variants.items()}
     assert call_phenotype("DPYD", call_diplotype("DPYD", pgx)) == "Poor Metabolizer"
+
+
+def _dpyd(genotypes):
+    """call_phenotype(call_diplotype) for DPYD from {rsid: genotype}."""
+    d = call_diplotype("DPYD", {r: {"genotype": g} for r, g in genotypes.items()})
+    return d, call_phenotype("DPYD", d)
+
+
+@pytest.mark.parametrize("genotypes", [
+    {"rs3918290": "TT", "rs55886062": "AC", "rs67376798": "TT"},   # *2A/*2A + *13 het
+    {"rs3918290": "CT", "rs55886062": "CC", "rs67376798": "TT"},   # *13/*13 + *2A het
+    {"rs3918290": "TT", "rs55886062": "AA", "rs67376798": "TA"},   # *2A/*2A + D949V het
+    {"rs3918290": "CT", "rs55886062": "AA", "rs67376798": "AA"},   # D949V/D949V + *2A het
+])
+def test_dpyd_more_than_two_variant_alleles_stays_poor(genotypes):
+    """Two no/decreased-function alleles with a no-function one is Poor under any phase."""
+    assert _dpyd(genotypes)[1] == "Poor Metabolizer"
+
+
+def test_dpyd_homozygous_d949v_is_intermediate():
+    assert _dpyd({"rs3918290": "CC", "rs55886062": "AA", "rs67376798": "AA"})[1] == "Intermediate Metabolizer"
+
+
+def test_dpyd_partial_panel_with_detected_variant_is_flagged():
+    """An untested DPYD SNP could turn a single-variant Intermediate into Poor."""
+    diplotype, phenotype = _dpyd({"rs3918290": "CT"})
+    assert "1/3 SNPs tested" in diplotype
+    assert phenotype.startswith("Indeterminate")
+
+
+def test_dpyd_partial_panel_poor_is_not_downgraded():
+    """Two no-function alleles are Poor whatever else is untested."""
+    assert _dpyd({"rs3918290": "TT"})[1] == "Poor Metabolizer"
