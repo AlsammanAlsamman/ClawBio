@@ -27,6 +27,7 @@ import math
 import os
 import sys
 from collections import Counter
+from decimal import InvalidOperation
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "lib"))
 from harmonize_lib import (  # noqa: E402
@@ -59,8 +60,10 @@ def derive(row, counts):
         try:
             out["P"] = p_from_log10p(row["LOG10P"])
             counts["P_from_LOG10P"] += 1
-        except Exception:
-            pass
+        except (InvalidOperation, ValueError, OverflowError):
+            # Non-numeric or infinite LOG10P: leave P empty (qc_filter drops the
+            # row as missing_required) and count it so the report says why.
+            counts["LOG10P_unparseable"] += 1
     if not out["P"] and to_float(row.get("Z")) is not None:
         out["P"] = fmt(p_from_z(to_float(row["Z"])))
         counts["P_from_Z"] += 1

@@ -212,6 +212,18 @@ class TestStageScripts:
         s = json.loads((tmp_path / "s.json").read_text())
         assert s["derived"]["BETA_from_OR"] == 1 and s["derived"]["SE_from_P"] == 1
 
+    def test_derive_effects_counts_unparseable_log10p(self, tmp_path):
+        src = tmp_path / "in.tsv"
+        src.write_text("SNP\tCHR\tBP\tEA\tNEA\tEAF\tBETA\tSE\tP\tN\tLOG10P\n"
+                       "x\t1\t100\tG\tA\t0.3\t0.1\t\t\t100\tabc\n"
+                       "y\t1\t200\tG\tA\t0.3\t0.1\t\t\t100\tinf\n")
+        out = tmp_path / "out.tsv"
+        r = run_stage("derive_effects", ["--input", str(src), "--out", str(out), "--summary-json", str(tmp_path / "s.json")])
+        assert r.returncode == 0, r.stderr
+        assert [row["P"] for row in read_tsv(out)] == ["", ""]
+        s = json.loads((tmp_path / "s.json").read_text())
+        assert s["derived"]["LOG10P_unparseable"] == 2
+
     def test_qc_filter_reasons(self, tmp_path):
         src = tmp_path / "in.tsv"
         rows = [
