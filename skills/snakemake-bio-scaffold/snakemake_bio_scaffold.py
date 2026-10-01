@@ -665,7 +665,9 @@ def _argparse_line(key: str, value) -> str:
         typ = "float"
     else:
         typ = "str"
-    return f'    p.add_argument("{flag}", type={typ}, required=True, help="analysis.yaml default: {str(value).replace('%', '%%')}")\n'
+    # argparse treats % in help as a format directive; quotes would end the literal.
+    default_text = str(value).replace("%", "%%").replace('"', '\\"')
+    return f'    p.add_argument("{flag}", type={typ}, required=True, help="analysis.yaml default: {default_text}")\n'
 
 
 def _render_script(spec: dict, idx: int) -> str:
