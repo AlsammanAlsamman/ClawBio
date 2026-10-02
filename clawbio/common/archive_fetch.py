@@ -21,6 +21,7 @@ import importlib.util
 import io
 import shlex
 import sys
+import urllib.parse
 from pathlib import Path
 
 from clawbio.common.report import DISCLAIMER
@@ -126,6 +127,23 @@ def safe_join(base: Path | str, rel: str) -> Path:
     if dest != root and root in dest.parents:
         return dest
     raise SystemExit(f"refusing archive file path outside the output directory: {rel!r}")
+
+
+def trusted_ebi_base(link: object) -> str | None:
+    """Return `link` if it is an https URL on an ebi.ac.uk host, else None.
+
+    BioStudies / ArrayExpress advertise the download base as `httpLink` in the
+    /studies/{accession}/info response. That is server data, so a value off
+    EBI, or not https, must not decide where bytes are fetched from; callers
+    fall back to their fixed www.ebi.ac.uk route instead.
+    """
+    if not isinstance(link, str):
+        return None
+    parts = urllib.parse.urlsplit(link)
+    host = (parts.hostname or "").lower()
+    if parts.scheme == "https" and (host == "ebi.ac.uk" or host.endswith(".ebi.ac.uk")):
+        return link
+    return None
 
 
 def scrub(text: str, output_dir: Path) -> str:

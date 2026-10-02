@@ -93,6 +93,28 @@ class TestSafeJoin:
             af.safe_join(base, "link/x.txt")
 
 
+class TestTrustedEbiBase:
+    """`httpLink` from /studies/{acc}/info decides where bytes come from, so
+    only an https URL on an ebi.ac.uk host is accepted."""
+
+    @pytest.mark.parametrize("link", [
+        "https://ftp.ebi.ac.uk/biostudies/fire/E-MTAB-/030/E-MTAB-10030",
+        "https://www.ebi.ac.uk/biostudies/files/S-B1",
+        "https://ebi.ac.uk/x",
+    ])
+    def test_accepts_https_on_ebi(self, link):
+        assert af.trusted_ebi_base(link) == link
+
+    @pytest.mark.parametrize("link", [
+        None, "", "https://evil.example/x", "https://ebi.ac.uk.evil.com/x",
+        "https://evilebi.ac.uk/x", "http://ftp.ebi.ac.uk/x", "file:///etc",
+        "ftp://ftp.ebi.ac.uk/x", "https://user@evil.example/x?ebi.ac.uk",
+        "-o/etc/passwd", 42,
+    ])
+    def test_rejects_everything_else(self, link):
+        assert af.trusted_ebi_base(link) is None
+
+
 class TestReplayArgv:
     """commands.sh must hold the command that was run, not a summary of it."""
 

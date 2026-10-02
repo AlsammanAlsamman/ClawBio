@@ -188,6 +188,18 @@ class TestDownloadBase:
         with patch.object(api, "get_json", return_value={}):
             assert api.file_url("E-MTAB-1", "b.txt") == f"{api.FILES}/E-MTAB-1/b.txt"
 
+    @pytest.mark.parametrize("link", [
+        "https://evil.example/x", "https://ebi.ac.uk.evil.com/x",
+        "http://ftp.ebi.ac.uk/x", "file:///etc",
+    ])
+    def test_untrusted_httplink_falls_back_to_the_legacy_path(self, link):
+        """The info payload is server data: a link off ebi.ac.uk, or not https,
+        must not decide where bytes are fetched from."""
+        import arrayexpress_fetch_api as api
+
+        with patch.object(api, "get_json", return_value={"httpLink": link}):
+            assert api.file_url("E-MTAB-1", "b.txt") == f"{api.FILES}/E-MTAB-1/b.txt"
+
 
 # --------------------------------------------------------------------------
 # CLI contract

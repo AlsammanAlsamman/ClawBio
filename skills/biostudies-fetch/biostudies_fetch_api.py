@@ -27,7 +27,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from clawbio.common.archive_fetch import safe_join
+from clawbio.common.archive_fetch import safe_join, trusted_ebi_base
 
 API = "https://www.ebi.ac.uk/biostudies/api/v1"
 FILES = "https://www.ebi.ac.uk/biostudies/files"
@@ -150,10 +150,11 @@ def file_url(accession, path):
 
     Files live under `Files/` beneath the advertised base, which is also what
     the BioStudies web UI links to. The legacy path stays as a fallback for
-    when /info is unreachable or omits httpLink.
+    when /info is unreachable or omits httpLink,
+    or advertises one that is not https on an ebi.ac.uk host.
     """
     quoted = urllib.parse.quote(path)
-    base = (study_info(accession) or {}).get("httpLink")
+    base = trusted_ebi_base((study_info(accession) or {}).get("httpLink"))
     if base:
         return f"{base.rstrip('/')}/Files/{quoted}"
     return f"{FILES}/{accession}/{quoted}"
