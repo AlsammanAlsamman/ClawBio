@@ -1138,7 +1138,6 @@ SKILLS = {
         "demo_args": ["--demo"],
         "description": "protocols.io bridge — search, browse, and retrieve scientific protocols via REST API",
         "allowed_extra_flags": {
-            "--login",
             "--search",
             "--protocol",
             "--steps",
