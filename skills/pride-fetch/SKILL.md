@@ -318,7 +318,13 @@ depends on the accession, so it is not listed as a fixed path above.
   [docs/data-handling.md](../../docs/data-handling.md#allowlisting-for-the-public-archive-skills).
 - **Gotcha 5**: `download-script` **writes a script and downloads nothing**.
   Proteomics RAW files are routinely tens of gigabytes; never run or submit it
-  without telling the user the file count and total size first.
+  without telling the user the file count and total size first. It emits only
+  `https://` locations (`ftp://` is rewritten first). Aspera and other
+  non-URL locations are skipped with a warning. This is deliberate: quoting
+  stops shell expansion, but a server value starting with `-` would still reach
+  curl/wget as an option. `download` likewise refuses non-http(s) URLs. If
+  every file is skipped, the project has no https location. Report that rather
+  than working around it.
 - **Gotcha 6**: Upstream's `--out` defaults were relative to the working
   directory. Here every path resolves under `--output`.
 
