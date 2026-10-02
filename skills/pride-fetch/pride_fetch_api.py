@@ -181,8 +181,12 @@ def _fname(file_rec):
 
 
 def download_file(url, out_dir):
+    dl = _https(url)
+    # The URL comes from the server's publicFileLocations, and urllib also opens
+    # file:// and data: URLs: refuse anything that is not a web URL.
+    if not dl.startswith(("https://", "http://")):
+        raise SystemExit(f"Refusing to download a non-http(s) location: {url!r}")
     os.makedirs(out_dir, exist_ok=True)
-    dl = url.replace("ftp://", "https://") if url.startswith("ftp://") else url
     name = dl.rstrip("/").split("/")[-1]
     dest = os.path.join(out_dir, name)
     if os.path.exists(dest):
@@ -305,7 +309,10 @@ def cmd_download_script(args):
             continue
         url = _https(url)
         name = dest_name(url)
-        if not is_safe_url(url) or name is None:
+        # shlex.quote stops shell expansion, not option parsing: a value starting
+        # with `-` (ftp_url falls back to any location) would reach curl/wget as
+        # an option. Only https is emitted (the shared emitter requires a scheme too).
+        if not url.startswith("https://") or not is_safe_url(url) or name is None:
             print(f"warning: skipping file with an unsafe URL: {url!r}", file=sys.stderr)
             continue
         cat = (f.get("fileCategory") or {}).get("value", "")

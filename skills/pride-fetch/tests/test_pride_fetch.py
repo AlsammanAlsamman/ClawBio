@@ -284,6 +284,62 @@ class TestSafety:
         assert unzip == [["-q", "-o", f"pride $(touch PWNED_OUT)/{names[1]}",
                           "-d", "pride $(touch PWNED_OUT)"]]
 
+    UNSAFE_LOCATIONS = [
+        "-o/etc/passwd",
+        "--config=evil.cfg",
+        "file:///etc/passwd",
+        "prd_ascp@fasp.ebi.ac.uk:pride/data/archive/2026/01/PXD0/a.raw",
+    ]
+
+    @pytest.mark.parametrize("value", UNSAFE_LOCATIONS)
+    def test_download_script_emits_only_https_urls(self, tmp_path, capsys, value):
+        """ftp_url() falls back to the first location of any kind, so a value that
+        starts with `-` would reach curl/wget as an option; shlex.quote does not
+        stop that. Only https (after the ftp rewrite) may be emitted."""
+        import pride_fetch_api as api
+
+        recs = [
+            {"publicFileLocations": [{"name": "Other", "value": value}]},
+            {"publicFileLocations": [
+                {"name": "FTP Protocol", "value": "ftp://ftp.pride.ebi.ac.uk/p/ok.raw"}]},
+        ]
+        script = tmp_path / "dl.sh"
+        args = api.argparse.Namespace(
+            accession="PXD0", ext=None, tool="curl", outdir="pride",
+            out=str(script), unzip=False, no_slurm=True)
+        with patch.object(api, "iter_files", return_value=recs):
+            api.cmd_download_script(args)
+        body = script.read_text()
+        assert value not in body
+        assert "https://ftp.pride.ebi.ac.uk/p/ok.raw" in body
+        assert "skipping" in capsys.readouterr().err
+
+    def test_download_script_refuses_a_project_with_no_https_location(self, tmp_path):
+        import pride_fetch_api as api
+
+        recs = [{"publicFileLocations": [{"name": "Other", "value": "-o/etc/passwd"}]}]
+        args = api.argparse.Namespace(
+            accession="PXD0", ext=None, tool="curl", outdir="pride",
+            out=str(tmp_path / "dl.sh"), unzip=False, no_slurm=True)
+        with patch.object(api, "iter_files", return_value=recs):
+            with pytest.raises(SystemExit):
+                api.cmd_download_script(args)
+        assert not (tmp_path / "dl.sh").exists()
+
+    @pytest.mark.parametrize("url", ["file:///etc/passwd", "-x", "data:,hello"])
+    def test_download_file_refuses_non_http_schemes(self, tmp_path, url):
+        """urllib opens file:// and data: URLs happily; a server-supplied
+        location must never read a local file into the output directory."""
+        import pride_fetch_api as api
+
+        def no_network(*a, **k):
+            raise AssertionError("urlopen must not be reached")
+
+        with patch.object(api.urllib.request, "urlopen", no_network):
+            with pytest.raises(SystemExit):
+                api.download_file(url, str(tmp_path))
+        assert list(tmp_path.iterdir()) == []
+
     def test_report_holds_no_absolute_output_path(self, tmp_path):
         import pride_fetch as app
 
