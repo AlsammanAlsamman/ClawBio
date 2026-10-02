@@ -340,6 +340,25 @@ class TestSafety:
                 api.download_file(url, str(tmp_path))
         assert list(tmp_path.iterdir()) == []
 
+    @pytest.mark.parametrize("field", ["job_name", "partition", "account", "cpus",
+                                       "mem", "time", "email"])
+    def test_slurm_header_values_cannot_break_out_of_their_line(self, tmp_path, field):
+        import pride_fetch_api as api
+
+        recs = [{"publicFileLocations": [
+            {"name": "FTP Protocol", "value": "ftp://ftp.pride.ebi.ac.uk/p/ok.raw"}]}]
+        opts = dict(job_name="j", partition="p", account="a", cpus="1", mem="4G",
+                    time="1:00:00", email="me@example.org")
+        opts[field] = "x\nrm -rf ~\r\n#SBATCH --wrap=evil"
+        script = tmp_path / "dl.sh"
+        args = api.argparse.Namespace(
+            accession="PXD0", ext=None, tool="curl", outdir="pride",
+            out=str(script), unzip=False, no_slurm=False, **opts)
+        with patch.object(api, "iter_files", return_value=recs):
+            api.cmd_download_script(args)
+        lines = script.read_text().splitlines()
+        assert not any(line.startswith(("rm", "#SBATCH --wrap")) for line in lines)
+
     def test_report_holds_no_absolute_output_path(self, tmp_path):
         import pride_fetch as app
 

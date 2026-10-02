@@ -245,24 +245,26 @@ def _download_cmd(tool: str, url: str, name: str) -> str:
 
 
 def _slurm_header(opts: SlurmOptions) -> str:
-    lines = ["#!/bin/bash", "#", f"#SBATCH --job-name={opts.job_name}"]
+    # Every value goes through _safe_field, so a newline cannot end the #SBATCH
+    # line and start a command.
+    lines = ["#!/bin/bash", "#", f"#SBATCH --job-name={_safe_field(opts.job_name)}"]
     if opts.partition:
-        lines.append(f"#SBATCH --partition={opts.partition}")
+        lines.append(f"#SBATCH --partition={_safe_field(opts.partition)}")
     else:
         lines.append("# #SBATCH --partition=<your_partition>   # set for your cluster")
     if opts.account:
-        lines.append(f"#SBATCH --account={opts.account}")
+        lines.append(f"#SBATCH --account={_safe_field(opts.account)}")
     else:
         lines.append("# #SBATCH --account=<your_account>        # set if required")
     lines += [
-        f"#SBATCH --cpus-per-task={opts.cpus}",
-        f"#SBATCH --mem={opts.mem}",
-        f"#SBATCH --time={opts.time}",
+        f"#SBATCH --cpus-per-task={_safe_field(str(opts.cpus))}",
+        f"#SBATCH --mem={_safe_field(opts.mem)}",
+        f"#SBATCH --time={_safe_field(opts.time)}",
         "#SBATCH --output=slurm-%j.out",
         "#SBATCH --error=slurm-%j.err",
     ]
     if opts.email:
-        lines += ["#SBATCH --mail-type=END,FAIL", f"#SBATCH --mail-user={opts.email}"]
+        lines += ["#SBATCH --mail-type=END,FAIL", f"#SBATCH --mail-user={_safe_field(opts.email)}"]
     else:
         lines += ["# #SBATCH --mail-type=END,FAIL",
                   "# #SBATCH --mail-user=<you@example.org>"]

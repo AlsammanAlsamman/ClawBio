@@ -269,24 +269,26 @@ def _dl_cmd(tool, url, name):
 
 
 def _slurm_header(args):
+    # Every value goes through _safe_field, so a newline cannot end the #SBATCH
+    # line and start a command.
     sb = [
         "#!/bin/bash",
         "#",
-        f"#SBATCH --job-name={args.job_name}",
+        f"#SBATCH --job-name={_safe_field(args.job_name)}",
     ]
-    sb.append(f"#SBATCH --partition={args.partition}" if args.partition
+    sb.append(f"#SBATCH --partition={_safe_field(args.partition)}" if args.partition
               else "# #SBATCH --partition=<your_partition>   # set for your cluster")
-    sb.append(f"#SBATCH --account={args.account}" if args.account
+    sb.append(f"#SBATCH --account={_safe_field(args.account)}" if args.account
               else "# #SBATCH --account=<your_account>        # set if required")
     sb += [
-        f"#SBATCH --cpus-per-task={args.cpus}",
-        f"#SBATCH --mem={args.mem}",
-        f"#SBATCH --time={args.time}",
+        f"#SBATCH --cpus-per-task={_safe_field(str(args.cpus))}",
+        f"#SBATCH --mem={_safe_field(args.mem)}",
+        f"#SBATCH --time={_safe_field(args.time)}",
         "#SBATCH --output=slurm-%j.out",
         "#SBATCH --error=slurm-%j.err",
     ]
     if args.email:
-        sb += ["#SBATCH --mail-type=END,FAIL", f"#SBATCH --mail-user={args.email}"]
+        sb += ["#SBATCH --mail-type=END,FAIL", f"#SBATCH --mail-user={_safe_field(args.email)}"]
     else:
         sb += ["# #SBATCH --mail-type=END,FAIL", "# #SBATCH --mail-user=<you@example.org>"]
     return "\n".join(sb)

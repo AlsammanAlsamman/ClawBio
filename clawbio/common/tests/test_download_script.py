@@ -177,6 +177,19 @@ class TestSlurmHeader:
         for token in ("nfsdata", "ukdri", "htc"):
             assert token not in lowered
 
+    @pytest.mark.parametrize("field", ["job_name", "partition", "account", "cpus",
+                                       "mem", "time", "email"])
+    def test_values_cannot_break_out_of_their_line(self, field):
+        """A newline in a header value would end the #SBATCH line and start a
+        command that runs when the job does."""
+        opts = SlurmOptions(job_name="j", partition="p", account="a",
+                            email="me@example.org")
+        setattr(opts, field, "x\nrm -rf ~\r\n#SBATCH --wrap=evil")
+        body, _ = build_download_script(
+            [("s1", ["https://x/1.fq.gz"])], tool="wget", slurm=opts)
+        lines = body.splitlines()
+        assert not any(line.startswith(("rm", "#SBATCH --wrap")) for line in lines)
+
 
 class TestWrite:
     def test_written_script_is_executable(self, tmp_path):
