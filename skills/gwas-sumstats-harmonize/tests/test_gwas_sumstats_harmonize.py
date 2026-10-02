@@ -27,7 +27,7 @@ WORKFLOW = SKILL_DIR / "workflow"
 STAGE_SCRIPTS = WORKFLOW / "scripts"
 EXAMPLES = SKILL_DIR / "examples"
 CANONICAL = ["SNP", "CHR", "BP", "EA", "NEA", "EAF", "BETA", "SE", "P", "N"]
-DEMO_DATASETS = ["cohort_ssf", "cohort_plink2", "cohort_metal", "cohort_regenie"]
+DEMO_DATASETS = ["cohort_ssf", "cohort_plink2", "cohort_metal", "cohort_regenie", "cohort_saige"]
 
 
 def run_cli(args, **kwargs):
@@ -130,8 +130,14 @@ class TestAlleleLogic:
             ("C", "T", "A", "G", "strand_flipped"),
             ("T", "C", "A", "G", "strand_flipped_swapped"),
             ("A", "C", "A", "G", "mismatch"),
-            ("T", "A", "A", "T", "aligned"),
-            ("A", "T", "A", "T", "swapped"),
+            # Palindromic pairs cannot be classified from the alleles alone:
+            # reverse-strand A/T looks exactly like a forward-strand swap.
+            ("T", "A", "A", "T", "palindromic"),
+            ("A", "T", "A", "T", "palindromic"),
+            ("A", "T", "A", "G", "mismatch"),
+            # Indels: reverse complement, not plain complement.
+            ("A", "AC", "AC", "A", "aligned"),
+            ("GT", "T", "AC", "A", "strand_flipped_swapped"),
         ],
     )
     def test_reference_alignment_cases(self, lib, ea, nea, ref, alt, expected):
@@ -358,6 +364,326 @@ class TestWrapperInputs:
 
     def test_no_input_errors(self, tmp_path):
         assert run_cli(["--output", str(tmp_path)]).returncode != 0
+
+
+# ── Review fixes (PR #526): strand, SAIGE, TEST, unmatched, build, indels, Z ─
+
+
+def write_rows(path: Path, header: list[str], rows: list[list]) -> Path:
+    path.write_text("\t".join(header) + "\n" + "".join("\t".join(map(str, r)) + "\n" for r in rows))
+    return path
+
+
+REF_HEADER = ["CHR", "BP", "REF", "ALT", "AF"]
+COMP = {"A": "T", "T": "A", "C": "G", "G": "C"}
+
+
+class TestPalindromicStrand:
+    @pytest.mark.parametrize(
+        "ea, eaf, af, expected",
+        [
+            ("T", 0.8, 0.8, "aligned"),                  # forward, EA = ALT
+            ("A", 0.2, 0.8, "swapped"),                  # forward, EA = REF
+            ("A", 0.8, 0.8, "strand_flipped"),           # reverse strand, true EA = ALT
+            ("T", 0.2, 0.8, "strand_flipped_swapped"),   # reverse strand, true EA = REF
+            ("T", 0.45, 0.8, None),                      # EAF in the ambiguous band
+            ("T", 0.8, 0.55, None),                      # reference AF in the ambiguous band
+            ("T", None, 0.8, None),                      # no EAF
+            ("T", 0.8, None, None),                      # no reference AF
+        ],
+    )
+    def test_resolve_palindromic_from_frequency(self, lib, ea, eaf, af, expected):
+        assert lib.resolve_palindromic(ea, COMP[ea], eaf, "A", "T", af) == expected
+
+    def test_reverse_strand_palindrome_keeps_its_sign(self, tmp_path):
+        ref = write_rows(tmp_path / "ref.tsv", REF_HEADER, [
+            ["1", "100", "A", "T", "0.8"],
+            ["1", "200", "A", "T", "0.8"],
+            ["1", "300", "C", "G", "0.5"],
+            ["1", "400", "C", "G", "0.9"],
+        ])
+        src = write_rows(tmp_path / "in.tsv", CANONICAL, [
+            ["rev", "1", "100", "A", "T", "0.8", "0.2", "0.02", "1e-5", "10"],   # reverse strand
+            ["fwd", "1", "200", "A", "T", "0.2", "0.3", "0.02", "1e-5", "10"],   # forward swap
+            ["amb", "1", "300", "C", "G", "0.1", "0.3", "0.02", "1e-5", "10"],   # ref AF ambiguous
+            ["noeaf", "1", "400", "C", "G", "", "0.3", "0.02", "1e-5", "10"],    # no EAF
+        ])
+        out = tmp_path / "o.tsv"
+        r = run_stage("align_reference", ["--input", str(src), "--reference", str(ref), "--out", str(out),
+                                          "--summary-json", str(tmp_path / "s.json"), "--drop-unmatched", "true"])
+        assert r.returncode == 0, r.stderr
+        rows = {row["SNP"]: row for row in read_tsv(out)}
+        assert set(rows) == {"rev", "fwd"}
+        assert (rows["rev"]["EA"], rows["rev"]["NEA"]) == ("T", "A")
+        assert float(rows["rev"]["BETA"]) == 0.2 and float(rows["rev"]["EAF"]) == 0.8
+        assert (rows["fwd"]["EA"], rows["fwd"]["NEA"]) == ("T", "A")
+        assert float(rows["fwd"]["BETA"]) == -0.3 and math.isclose(float(rows["fwd"]["EAF"]), 0.8)
+        al = json.loads((tmp_path / "s.json").read_text())["alignment"]
+        assert al["palindromic_unresolved"] == 2
+        assert al["strand_flipped"] == 1 and al["swapped"] == 1
+
+    def test_demo_contains_reverse_strand_palindrome(self):
+        ref = reference()
+        flipped = 0
+        for row in read_tsv(EXAMPLES / "cohort_ssf.tsv"):
+            r = ref[(row["chromosome"], row["base_pair_location"])]
+            if COMP[r["REF"]] == r["ALT"] and row["effect_allele"] == COMP[r["ALT"]] \
+                    and row["effect_allele_frequency"] \
+                    and math.isclose(float(row["effect_allele_frequency"]), float(r["AF"])):
+                flipped += 1
+        assert flipped >= 1
+
+
+class TestSaige:
+    HEADER = ["CHR", "POS", "MarkerID", "Allele1", "Allele2", "AC_Allele2", "AF_Allele2",
+              "MissingRate", "BETA", "SE", "Tstat", "var", "p.value", "N"]
+
+    def test_saige_effect_allele_is_allele2(self, lib):
+        det = lib.detect_columns(self.HEADER)
+        m = det["mapping"]
+        assert m["EA"] == "Allele2" and m["NEA"] == "Allele1"
+        assert m["EAF"] == "AF_Allele2" and m["SNP"] == "MarkerID" and m["P"] == "p.value"
+        assert any("SAIGE" in n for n in det["notes"])
+
+    def test_metal_and_bolt_keep_allele1_as_effect(self, lib):
+        metal = ["MarkerName", "Allele1", "Allele2", "Effect", "StdErr", "P-value"]
+        bolt = ["SNP", "CHR", "BP", "ALLELE1", "ALLELE0", "A1FREQ", "BETA", "SE", "P_BOLT_LMM"]
+        assert lib.detect_columns(metal)["mapping"]["EA"] == "Allele1"
+        assert lib.detect_columns(bolt)["mapping"]["EA"] == "ALLELE1"
+
+    def test_saige_demo_signs_match_truth(self, demo_out):
+        """SAIGE BETA is for Allele2: aligned BETA must equal METAL's, not its negation."""
+        metal = {(r["CHR"], r["BP"]): r for r in read_tsv(demo_out / "harmonized" / "cohort_metal.tsv")}
+        saige = read_tsv(demo_out / "harmonized" / "cohort_saige.tsv")
+        assert len(saige) > 150
+        for row in saige:
+            truth = metal.get((row["CHR"], row["BP"]))
+            if truth:
+                assert math.isclose(float(row["BETA"]), float(truth["BETA"]), abs_tol=1e-3), row
+
+
+PLINK2_TEST_HEADER = ["#CHROM", "POS", "ID", "REF", "ALT", "A1", "TEST", "OBS_CT", "BETA", "SE", "T_STAT", "P"]
+
+
+class TestPlinkTestColumn:
+    def test_only_additive_rows_kept(self, tmp_path):
+        src = write_rows(tmp_path / "p.glm.linear", PLINK2_TEST_HEADER, [
+            ["1", "100", "rs1", "C", "A", "A", "ADD", "100", "0.1", "0.02", "5", "1e-5"],
+            ["1", "100", "rs1", "C", "A", "A", "SEX", "100", "0.9", "0.01", "90", "1e-200"],
+            ["1", "100", "rs1", "C", "A", "A", "PC1", "100", "0.5", "0.01", "50", "1e-100"],
+            ["1", "200", "rs2", "G", "T", "G", "ADD", "100", "-0.1", "0.02", "-5", "1e-5"],
+        ])
+        out = tmp_path / "m.tsv"
+        r = run_stage("map_columns", ["--input", str(src), "--out", str(out), "--summary-json", str(tmp_path / "m.json")])
+        assert r.returncode == 0, r.stderr
+        assert [row["BETA"] for row in read_tsv(out)] == ["0.1", "-0.1"]
+        s = json.loads((tmp_path / "m.json").read_text())
+        assert s["dropped"] == {"non_additive_test": 2}
+        assert s["rows_out"] == 2
+
+    def test_test_column_without_add_rows_errors(self, tmp_path):
+        src = write_rows(tmp_path / "p.glm.linear", PLINK2_TEST_HEADER, [
+            ["1", "100", "rs1", "C", "A", "A", "DOM", "100", "0.1", "0.02", "5", "1e-5"],
+        ])
+        r = run_stage("map_columns", ["--input", str(src), "--out", str(tmp_path / "m.tsv"),
+                                      "--summary-json", str(tmp_path / "m.json")])
+        assert r.returncode != 0
+        assert "ADD" in r.stderr
+
+    def test_dropped_counted_in_wrapper_result(self, tmp_path):
+        src = write_rows(tmp_path / "p.glm.linear", PLINK2_TEST_HEADER, [
+            ["1", "100", "rs1", "C", "A", "A", "ADD", "100", "0.1", "0.02", "5", "1e-5"],
+            ["1", "100", "rs1", "C", "A", "A", "SEX", "100", "0.9", "0.01", "90", "1e-200"],
+        ])
+        out = tmp_path / "out"
+        r = run_cli(["--input", str(src), "--output", str(out), "--engine", "python"])
+        assert r.returncode == 0, r.stderr
+        res = json.loads((out / "result.json").read_text())["datasets"]["p"]
+        assert res["dropped"]["non_additive_test"] == 1
+        assert res["rows_in"] == 2 and res["rows_out"] == 1
+        assert [row["BETA"] for row in read_tsv(out / "harmonized" / "p.tsv")] == ["0.1"]
+
+
+class TestPlink2MultiAllelic:
+    def test_multiallelic_alt(self, tmp_path):
+        src = write_rows(tmp_path / "m.glm.linear", ["#CHROM", "POS", "ID", "REF", "ALT", "A1", "BETA", "SE", "P"], [
+            ["1", "100", "rs1", "C", "A,G", "A", "0.1", "0.02", "1e-5"],   # A1 = one ALT: NEA = REF
+            ["1", "200", "rs2", "C", "A,G", "C", "0.1", "0.02", "1e-5"],   # A1 = REF: other allele ambiguous
+        ])
+        out = tmp_path / "out"
+        r = run_cli(["--input", str(src), "--output", str(out), "--engine", "python"])
+        assert r.returncode == 0, r.stderr
+        rows = read_tsv(out / "harmonized" / "m.tsv")
+        assert [(row["SNP"], row["EA"], row["NEA"]) for row in rows] == [("rs1", "A", "C")]
+        res = json.loads((out / "result.json").read_text())["datasets"]["m"]
+        assert res["dropped"]["invalid_allele"] == 1
+
+
+class TestUnmatchedDefault:
+    def _inputs(self, tmp_path):
+        ref = write_rows(tmp_path / "ref.tsv", REF_HEADER, [["1", "100", "C", "A", "0.3"]])
+        src = write_rows(tmp_path / "s.tsv", ["SNP", "CHR", "BP", "EA", "NEA", "BETA", "SE", "P"], [
+            ["rs1", "1", "100", "A", "C", "0.1", "0.02", "1e-5"],
+            ["rs2", "1", "200", "G", "T", "0.1", "0.02", "1e-5"],
+        ])
+        return src, ref
+
+    def test_unmatched_dropped_by_default_with_reference(self, tmp_path):
+        src, ref = self._inputs(tmp_path)
+        out = tmp_path / "out"
+        r = run_cli(["--input", str(src), "--reference", str(ref), "--output", str(out), "--engine", "python"])
+        assert r.returncode == 0, r.stderr
+        assert [row["SNP"] for row in read_tsv(out / "harmonized" / "s.tsv")] == ["rs1"]
+        res = json.loads((out / "result.json").read_text())["datasets"]["s"]
+        assert res["dropped"]["not_in_reference"] == 1
+        assert "(EA = reference ALT)" in (out / "report.md").read_text(encoding="utf-8")
+
+    def test_keep_unmatched_is_reported_honestly(self, tmp_path):
+        src, ref = self._inputs(tmp_path)
+        out = tmp_path / "out"
+        r = run_cli(["--input", str(src), "--reference", str(ref), "--output", str(out),
+                     "--engine", "python", "--keep-unmatched"])
+        assert r.returncode == 0, r.stderr
+        assert [row["SNP"] for row in read_tsv(out / "harmonized" / "s.tsv")] == ["rs1", "rs2"]
+        text = (out / "report.md").read_text(encoding="utf-8")
+        assert "(EA = reference ALT)" not in text
+        assert "not aligned" in text
+
+
+class TestBuild:
+    def test_build_hint_from_column_name(self, lib):
+        det = lib.detect_columns(["SNP", "CHR", "BP_hg19", "EA", "NEA", "BETA", "SE", "P"])
+        assert det["mapping"]["BP"] == "BP_hg19"
+        assert det["build"] == "GRCh37"
+        assert lib.detect_columns(["SNP", "CHR", "pos_b38", "EA", "NEA", "BETA", "SE", "P"])["build"] == "GRCh38"
+        assert lib.detect_columns(["SNP", "CHR", "BP", "EA", "NEA", "BETA", "SE", "P"])["build"] is None
+
+    def test_build_recorded_in_result(self, tmp_path):
+        src = write_rows(tmp_path / "s.tsv", ["SNP", "CHR", "BP_hg19", "EA", "NEA", "BETA", "SE", "P"],
+                         [["rs1", "1", "100", "A", "C", "0.1", "0.02", "1e-5"]])
+        out = tmp_path / "out"
+        r = run_cli(["--input", str(src), "--output", str(out), "--engine", "python"])
+        assert r.returncode == 0, r.stderr
+        assert json.loads((out / "result.json").read_text())["datasets"]["s"]["build"] == "GRCh37"
+        assert "GRCh37" in (out / "report.md").read_text(encoding="utf-8")
+
+    def test_declared_build_conflicting_with_header_errors(self, tmp_path):
+        src = write_rows(tmp_path / "s.tsv", ["SNP", "CHR", "BP_hg19", "EA", "NEA", "BETA", "SE", "P"],
+                         [["rs1", "1", "100", "A", "C", "0.1", "0.02", "1e-5"]])
+        r = run_cli(["--input", str(src), "--output", str(tmp_path / "out"), "--engine", "python", "--build", "GRCh38"])
+        assert r.returncode != 0
+        assert "GRCh37" in r.stderr and "GRCh38" in r.stderr
+
+    def test_declared_build_recorded(self, tmp_path):
+        src = write_rows(tmp_path / "s.tsv", ["SNP", "CHR", "BP", "EA", "NEA", "BETA", "SE", "P"],
+                         [["rs1", "1", "100", "A", "C", "0.1", "0.02", "1e-5"]])
+        out = tmp_path / "out"
+        r = run_cli(["--input", str(src), "--output", str(out), "--engine", "python", "--build", "GRCh38"])
+        assert r.returncode == 0, r.stderr
+        assert json.loads((out / "result.json").read_text())["build"] == "GRCh38"
+
+
+class TestZOnly:
+    def test_z_without_eaf_and_n_is_refused_up_front(self, lib):
+        with pytest.raises(lib.HarmonizeError, match="effect size"):
+            lib.check_derivable(lib.detect_columns(["SNP", "CHR", "BP", "EA", "NEA", "Z"]))
+
+    def test_z_with_eaf_and_n_is_derivable(self, lib):
+        lib.check_derivable(lib.detect_columns(["SNP", "CHR", "BP", "EA", "NEA", "EAF", "N", "Z"]))
+
+    def test_beta_se_from_z_standardised(self, tmp_path):
+        src = write_rows(tmp_path / "in.tsv", CANONICAL + ["Z"], [
+            ["x", "1", "100", "G", "A", "0.3", "", "", "", "1000", "4"],
+        ])
+        out = tmp_path / "out.tsv"
+        r = run_stage("derive_effects", ["--input", str(src), "--out", str(out), "--summary-json", str(tmp_path / "s.json")])
+        assert r.returncode == 0, r.stderr
+        row = read_tsv(out)[0]
+        denom = math.sqrt(2 * 0.3 * 0.7 * (1000 + 16))
+        assert math.isclose(float(row["BETA"]), 4 / denom, rel_tol=1e-5)
+        assert math.isclose(float(row["SE"]), 1 / denom, rel_tol=1e-5)
+        assert math.isclose(float(row["P"]), math.erfc(4 / math.sqrt(2)), rel_tol=1e-4)
+        assert json.loads((tmp_path / "s.json").read_text())["derived"]["BETA_SE_from_Z"] == 1
+
+    def test_z_only_file_errors_in_wrapper(self, tmp_path):
+        src = write_rows(tmp_path / "z.tsv", ["SNP", "CHR", "BP", "EA", "NEA", "Z"],
+                         [["rs1", "1", "100", "A", "C", "4"]])
+        r = run_cli(["--input", str(src), "--output", str(tmp_path / "out"), "--engine", "python"])
+        assert r.returncode != 0
+        assert "effect size" in r.stderr
+
+    def test_z_file_with_eaf_and_n_harmonizes(self, tmp_path):
+        src = write_rows(tmp_path / "z.tsv", ["SNP", "CHR", "BP", "EA", "NEA", "EAF", "N", "Z"],
+                         [["rs1", "1", "100", "A", "C", "0.3", "1000", "4"]])
+        out = tmp_path / "out"
+        r = run_cli(["--input", str(src), "--output", str(out), "--engine", "python"])
+        assert r.returncode == 0, r.stderr
+        assert len(read_tsv(out / "harmonized" / "z.tsv")) == 1
+
+
+class TestQcOptions:
+    ROWS = [
+        ["palin_mid", "1", "100", "A", "T", "0.5", "0.1", "0.02", "1e-5", "10"],
+        ["palin_ext", "1", "200", "C", "G", "0.9", "0.1", "0.02", "1e-5", "10"],
+        ["rare", "1", "300", "G", "A", "0.005", "0.1", "0.02", "1e-5", "10"],
+        ["rare_hi", "1", "400", "G", "A", "0.995", "0.1", "0.02", "1e-5", "10"],
+        ["indel", "1", "500", "GA", "G", "0.3", "0.1", "0.02", "1e-5", "10"],
+        ["common", "1", "600", "G", "A", "0.3", "0.1", "0.02", "1e-5", "10"],
+    ]
+
+    def _run(self, tmp_path, palindromic="ambiguous", min_maf="0", keep_indels="true"):
+        src = write_rows(tmp_path / "in.tsv", CANONICAL, self.ROWS)
+        out = tmp_path / "out.tsv"
+        r = run_stage("qc_filter", ["--input", str(src), "--out", str(out), "--summary-json", str(tmp_path / "s.json"),
+                                    "--palindromic", palindromic, "--min-maf", min_maf, "--keep-indels", keep_indels])
+        assert r.returncode == 0, r.stderr
+        return [row["SNP"] for row in read_tsv(out)], json.loads((tmp_path / "s.json").read_text())["dropped"]
+
+    def test_palindromic_all(self, tmp_path):
+        kept, dropped = self._run(tmp_path, palindromic="all")
+        assert "palin_mid" not in kept and "palin_ext" not in kept
+        assert dropped == {"palindromic": 2}
+
+    def test_palindromic_none(self, tmp_path):
+        kept, dropped = self._run(tmp_path, palindromic="none")
+        assert "palin_mid" in kept and "palin_ext" in kept
+        assert dropped == {}
+
+    def test_min_maf(self, tmp_path):
+        kept, dropped = self._run(tmp_path, palindromic="none", min_maf="0.01")
+        assert "rare" not in kept and "rare_hi" not in kept and "common" in kept
+        assert dropped == {"low_maf": 2}
+
+    def test_drop_indels(self, tmp_path):
+        kept, dropped = self._run(tmp_path, palindromic="none", keep_indels="false")
+        assert "indel" not in kept
+        assert dropped == {"invalid_allele": 1}
+
+    def test_wrapper_flags_reach_the_stages(self, tmp_path):
+        src = write_rows(tmp_path / "s.tsv", CANONICAL, self.ROWS)
+        out = tmp_path / "out"
+        r = run_cli(["--input", str(src), "--output", str(out), "--engine", "python",
+                     "--palindromic", "all", "--min-maf", "0.01", "--drop-indels"])
+        assert r.returncode == 0, r.stderr
+        assert [row["SNP"] for row in read_tsv(out / "harmonized" / "s.tsv")] == ["common"]
+
+
+class TestIndelAlignment:
+    def test_reverse_strand_indel_aligned(self, tmp_path):
+        ref = write_rows(tmp_path / "ref.tsv", REF_HEADER, [["1", "100", "AC", "A", "0.3"],
+                                                           ["1", "200", "G", "GTA", "0.3"]])
+        src = write_rows(tmp_path / "in.tsv", CANONICAL, [
+            ["del", "1", "100", "GT", "T", "0.7", "0.2", "0.02", "1e-5", "10"],   # reverse complement, EA = REF
+            ["ins", "1", "200", "GTA", "G", "0.3", "0.2", "0.02", "1e-5", "10"],  # aligned
+        ])
+        out = tmp_path / "o.tsv"
+        r = run_stage("align_reference", ["--input", str(src), "--reference", str(ref), "--out", str(out),
+                                          "--summary-json", str(tmp_path / "s.json"), "--drop-unmatched", "true"])
+        assert r.returncode == 0, r.stderr
+        rows = {row["SNP"]: row for row in read_tsv(out)}
+        assert (rows["del"]["EA"], rows["del"]["NEA"]) == ("A", "AC")
+        assert float(rows["del"]["BETA"]) == -0.2
+        assert (rows["ins"]["EA"], rows["ins"]["NEA"]) == ("GTA", "G")
 
 
 # ── Output contract ───────────────────────────────────────────────────────────

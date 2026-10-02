@@ -12,6 +12,11 @@ derive_effects. Two format quirks are resolved here because only the raw
 header shows them:
   - PLINK2 REF/ALT/A1: EA = A1, NEA = whichever of REF/ALT A1 is not, per row.
   - No CHR/BP columns (e.g. METAL): parsed from a "chr:pos" SNP id.
+  - PLINK TEST column: only TEST == ADD rows are kept (covariate and other
+    model rows share the variant's CHR:BP and often have a smaller P); the
+    rest are counted as non_additive_test. A TEST column with no ADD rows is
+    an error rather than a silently empty output.
+This is the only stage besides qc_filter that drops rows.
 
 Example:
     python scripts/map_columns.py \\
@@ -53,6 +58,7 @@ def main():
             explicit = json.load(fh) or {}
 
     header, rows = read_raw(args.input)
+    rows_in = len(rows)
     logger.info("Read %d rows, %d columns from %s", len(rows), len(header), args.input)
     try:
         detected = detect_columns(header, explicit)
@@ -67,6 +73,19 @@ def main():
     parse_pos = not ("CHR" in mapping and "BP" in mapping)
     columns = CANONICAL + [h for h in HELPERS if h in mapping]
     out_rows, short_rows, unparsed_pos = [], 0, 0
+    dropped = {}
+
+    test_col = detected["test_column"]
+    if test_col is not None:
+        tests = [(r[idx[test_col]] if len(r) > idx[test_col] else "").upper() for r in rows]
+        if rows and "ADD" not in tests:
+            logger.error("TEST column '%s' has no ADD rows (saw: %s); only additive-model results "
+                         "are harmonized", test_col, sorted(set(tests))[:10])
+            sys.exit(2)
+        n_other = sum(t != "ADD" for t in tests)
+        rows = [r for r, t in zip(rows, tests) if t == "ADD"]
+        if n_other:
+            dropped["non_additive_test"] = n_other
 
     for raw in rows:
         if len(raw) < len(header):
@@ -96,16 +115,18 @@ def main():
     summary = {
         "stage": "map_columns",
         "input": args.input,
-        "rows_in": len(rows),
+        "rows_in": rows_in,
         "rows_out": len(out_rows),
         "mapping": mapping,
         "plink2_other": list(other) if other else None,
+        "build": detected["build"],
+        "dropped": dropped,
         "notes": notes,
     }
     os.makedirs(os.path.dirname(os.path.abspath(args.summary_json)), exist_ok=True)
     with open(args.summary_json, "w") as fh:
         json.dump(summary, fh, indent=2)
-    logger.info("%d in, 0 dropped, %d kept -> %s", len(rows), len(out_rows), args.out)
+    logger.info("%d in, %d dropped, %d kept -> %s", rows_in, rows_in - len(out_rows), len(out_rows), args.out)
 
 
 if __name__ == "__main__":

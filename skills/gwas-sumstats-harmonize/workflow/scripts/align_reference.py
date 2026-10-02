@@ -8,13 +8,16 @@ Reference: tab-separated with header CHR BP REF ALT [AF], AF = ALT frequency,
 same genome build as the summary statistics. Per variant (matched on CHR:BP):
   aligned                 EA/NEA = ALT/REF                 unchanged
   swapped                 EA/NEA = REF/ALT                 swap, BETA = -BETA, EAF = 1 - EAF
-  strand_flipped          complement(EA/NEA) = ALT/REF     complement alleles
-  strand_flipped_swapped  complement(EA/NEA) = REF/ALT     complement + swap
+  strand_flipped          revcomp(EA/NEA) = ALT/REF        reverse-complement alleles
+  strand_flipped_swapped  revcomp(EA/NEA) = REF/ALT        reverse-complement + swap
   mismatch                anything else                    dropped
-  not_in_reference        no reference row at CHR:BP       kept, or dropped with --drop-unmatched true
-Palindromic SNVs are matched on the forward strand only. Missing EAF is filled
-from the reference AF only after alignment, so the frequency always belongs to
-the effect allele.
+  not_in_reference        no reference row at CHR:BP       dropped with --drop-unmatched true, else kept
+Palindromic SNVs (A/T, C/G) cannot be classified from alleles: reverse-strand
+A/T looks exactly like a forward swap. They are resolved by frequency (EAF and
+the reference ALT frequency on the same side of 0.5 -> EA is ALT) and dropped
+as palindromic_unresolved when EAF or AF is missing or within 0.4-0.6.
+Missing EAF is filled from the reference AF only after alignment, so the
+frequency always belongs to the effect allele.
 
 Without --reference the stage passes rows through unchanged.
 
@@ -24,7 +27,7 @@ Example:
         --reference resources/reference.tsv \\
         --out results/align_reference/cohort.tsv \\
         --summary-json results/align_reference/cohort.summary.json \\
-        --drop-unmatched false
+        --drop-unmatched true
 """
 import argparse
 import json
@@ -36,7 +39,8 @@ from collections import Counter, defaultdict
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "lib"))
 from harmonize_lib import (  # noqa: E402
-    CANONICAL, classify_alignment, complement, fmt, normalize_chr, read_table, to_float, write_table,
+    CANONICAL, classify_alignment, complement, fmt, normalize_chr, read_table, resolve_palindromic,
+    to_float, write_table,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -74,8 +78,14 @@ def load_reference(path):
 
 def align(row, candidates, counts):
     """Return the aligned row, or None to drop it."""
+    unresolved = False
     for ref, alt, af in candidates:
         case = classify_alignment(row["EA"], row["NEA"], ref, alt)
+        if case == "palindromic":
+            case = resolve_palindromic(row["EA"], row["NEA"], to_float(row["EAF"]), ref, alt, to_float(af))
+            if case is None:
+                unresolved = True
+                continue
         if case == "mismatch":
             continue
         counts[case] += 1
@@ -91,7 +101,7 @@ def align(row, candidates, counts):
             row["EAF"] = af
             counts["eaf_filled"] += 1
         return row
-    counts["mismatch"] += 1
+    counts["palindromic_unresolved" if unresolved else "mismatch"] += 1
     return None
 
 

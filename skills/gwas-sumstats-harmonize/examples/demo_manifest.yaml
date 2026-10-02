@@ -1,4 +1,4 @@
-# Demo manifest for gwas-sumstats-harmonize: four synthetic cohorts, each in a
+# Demo manifest for gwas-sumstats-harmonize: five synthetic cohorts, each in a
 # different real-world summary-statistics convention, plus a synthetic reference
 # panel to align alleles against. Paths are relative to this file.
 reference: reference.tsv
@@ -15,3 +15,6 @@ datasets:
   cohort_regenie:
     path: cohort_regenie.regenie
     label: REGENIE step-2 output
+  cohort_saige:
+    path: cohort_saige.txt
+    label: SAIGE step-2 output

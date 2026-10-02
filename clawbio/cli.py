@@ -1264,7 +1264,7 @@ SKILLS = {
         "description": "GWAS Sumstats Harmonizer — canonical columns, BETA/SE/P derivation, QC, reference allele alignment",
         "allowed_extra_flags": {
             "--reference", "--columns", "--palindromic", "--min-maf", "--drop-indels",
-            "--drop-unmatched", "--engine", "--cores",
+            "--keep-unmatched", "--build", "--engine", "--cores",
         },
         "extra_path_flags": {"--reference", "--columns"},
         "accepts_genotypes": False,

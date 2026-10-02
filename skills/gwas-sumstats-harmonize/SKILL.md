@@ -2,7 +2,7 @@
 name: gwas-sumstats-harmonize
 description: >-
   Harmonize GWAS summary statistics from any common format (GWAS-Catalog SSF, PLINK 1.9/2,
-  REGENIE, METAL, BOLT/SAIGE-style) to one canonical table (SNP CHR BP EA NEA EAF BETA SE P N):
+  REGENIE, METAL, BOLT, SAIGE) to one canonical table (SNP CHR BP EA NEA EAF BETA SE P N):
   column detection, BETA/SE/P derivation, QC with drop reasons, and allele alignment to a
   reference panel, run as a Snakemake workflow.
 license: MIT
@@ -58,7 +58,7 @@ metadata:
       - pyyaml>=6.0
   demo_data:
     - path: examples/demo_manifest.yaml
-      description: Four synthetic cohorts in SSF, PLINK2, METAL and REGENIE formats plus a synthetic reference
+      description: Five synthetic cohorts in SSF, PLINK2, METAL, REGENIE and SAIGE formats plus a synthetic reference
   endpoints:
     cli: python skills/gwas-sumstats-harmonize/gwas_sumstats_harmonize.py --input {sumstats} --output {output_dir}
   openclaw:
@@ -115,11 +115,11 @@ You are **GWAS Sumstats Harmonizer**, a specialised ClawBio agent for statistica
 
 ## Core Capabilities
 
-1. **Column detection**: alias table covering SSF, PLINK 1.9/2, REGENIE, METAL, BOLT, SAIGE-style headers; explicit `--columns` mapping always wins.
-2. **Format quirks**: PLINK2 REF/ALT/A1 trio (NEA = the other allele, per row); METAL-style files with no CHR/BP (parsed from `chr:pos` ids); comma, tab or whitespace delimiters; `.gz`.
-3. **Derivation**: BETA = ln(OR); SE = |BETA| / z(P); P from LOG10P (exact, no underflow), Z, or BETA/SE.
-4. **QC with reasons**: missing fields, invalid P/SE/BETA, invalid alleles, palindromic SNVs, low MAF, duplicates (smallest P kept); output sorted by CHR, BP.
-5. **Reference alignment**: EA = reference ALT; swaps flip BETA and EAF; strand flips complemented; missing EAF filled from the reference only after alignment.
+1. **Column detection**: alias table covering SSF, PLINK 1.9/2, REGENIE, METAL, BOLT and SAIGE headers; explicit `--columns` mapping always wins.
+2. **Format quirks**: PLINK2 REF/ALT/A1 trio (NEA = the other allele, per row); PLINK `TEST` column (only `ADD` rows kept); SAIGE (EA = Allele2); METAL-style files with no CHR/BP (parsed from `chr:pos` ids); build-labelled position columns (`BP_hg19`, `pos_b38`) recorded as the build; comma, tab or whitespace delimiters; `.gz`.
+3. **Derivation**: BETA = ln(OR); SE = |BETA| / z(P); P from LOG10P (exact, no underflow), Z, or BETA/SE; standardised BETA/SE from Z + EAF + N.
+4. **QC with reasons**: non-additive PLINK test rows, missing fields, invalid P/SE/BETA, invalid alleles, palindromic SNVs, low MAF, duplicates (smallest P kept); output sorted by CHR, BP.
+5. **Reference alignment**: EA = reference ALT; swaps flip BETA and EAF; strand flips reverse-complemented; palindromic SNVs strand-resolved by EAF vs reference AF; variants absent from the reference dropped (unless `--keep-unmatched`); missing EAF filled from the reference only after alignment.
 6. **Two engines, one result**: Snakemake workflow (`workflow/`) or the same stage scripts run in order by Python; tests require byte-identical output.
 
 ## Scope
@@ -137,10 +137,10 @@ You are **GWAS Sumstats Harmonizer**, a specialised ClawBio agent for statistica
 ## Workflow
 
 1. **Configure (prescriptive)**: write `<output>/config/{data,analysis,software}.yaml`; `config_loader.py` validates paths, column maps and settings.
-2. **map_columns (prescriptive)**: detect or apply the column map; refuse with the header shown if a required field is neither present nor derivable.
+2. **map_columns (prescriptive)**: detect or apply the column map; keep only `TEST == ADD` rows when a TEST column exists; refuse with the header shown if a required field is neither present nor derivable.
 3. **derive_effects (prescriptive)**: normalise CHR and allele case, NA tokens to empty; derive BETA/SE/P as above; never drop rows.
 4. **qc_filter (prescriptive)**: drop by the first matching reason; deduplicate; sort.
-5. **align_reference (prescriptive)**: classify each variant against the reference and apply the swap/flip; pass through if no reference.
+5. **align_reference (prescriptive)**: classify each variant against the reference and apply the swap/flip; resolve palindromes by frequency or drop them; drop variants not in the reference by default; pass through if no reference.
 6. **Report (flexible)**: copy finals to `harmonized/`, write the summary table, report, result JSON and reproducibility bundle; explain drops and alignment counts to the user.
 
 ## CLI Reference
@@ -148,7 +148,7 @@ You are **GWAS Sumstats Harmonizer**, a specialised ClawBio agent for statistica
 ```bash
 # One file, auto-detected columns, aligned to a reference
 python skills/gwas-sumstats-harmonize/gwas_sumstats_harmonize.py \
-  --input cohort.regenie.gz --reference ref_grch37.tsv --output out/
+  --input cohort.regenie.gz --reference ref_grch37.tsv --build GRCh37 --output out/
 
 # Several cohorts at once
 python skills/gwas-sumstats-harmonize/gwas_sumstats_harmonize.py --input manifest.yaml --output out/ --cores 4
@@ -157,11 +157,11 @@ python skills/gwas-sumstats-harmonize/gwas_sumstats_harmonize.py --input manifes
 python skills/gwas-sumstats-harmonize/gwas_sumstats_harmonize.py \
   --input odd.txt --columns cols.yaml --output out/
 
-# Demo (4 synthetic cohorts, 4 formats)
+# Demo (5 synthetic cohorts, 5 formats)
 python clawbio.py run harmonize --demo
 ```
 
-Options: `--palindromic ambiguous|all|none`, `--min-maf`, `--drop-indels`, `--drop-unmatched`, `--engine auto|snakemake|python`, `--cores`.
+Options: `--palindromic ambiguous|all|none`, `--min-maf`, `--drop-indels`, `--keep-unmatched`, `--build GRCh37|GRCh38`, `--engine auto|snakemake|python`, `--cores`.
 
 ## Demo
 
@@ -169,14 +169,14 @@ Options: `--palindromic ambiguous|all|none`, `--min-maf`, `--drop-indels`, `--dr
 python clawbio.py run harmonize --demo
 ```
 
-Expected output: four harmonized tables (194-196 variants each) whose aligned BETAs agree across all four formats; the SSF cohort shows 39 swaps, 12 strand flips, 10 EAF values filled, 2 invalid p-values and 1 duplicate removed.
+Expected output: five harmonized tables (194-196 variants each) whose aligned BETAs agree across all five formats; the SSF cohort shows 39 swaps, 15 strand flips (3 of them reverse-strand palindromic SNVs resolved by frequency), 10 EAF values filled, 2 invalid p-values and 1 duplicate removed.
 
 ## Algorithm / Methodology
 
-1. **Column precedence**: explicit map > PLINK2 trio (`A1`+`REF`+`ALT`) > alias table in priority order. `MAF` is never mapped to EAF.
-2. **Effects**: β = ln(OR); z(P) = −Φ⁻¹(P/2); SE = |β|/z(P); P = 2Φ(−|β/SE|). The symmetric forms keep precision in the tails (1 − P/2 rounds to 1.0 below P ≈ 1e-16).
-3. **Palindromic rule** (`ambiguous`, default): drop A/T and C/G SNVs when EAF is missing or 0.4 ≤ EAF ≤ 0.6, where strand cannot be inferred from frequency.
-4. **Alignment** to reference (REF, ALT): EA/NEA = ALT/REF keep; = REF/ALT swap (β → −β, EAF → 1 − EAF); complements: flip strand (then swap if needed); otherwise drop as mismatch. Palindromes: forward strand only.
+1. **Column precedence**: explicit map > SAIGE (`Allele1`+`Allele2`+`AF_Allele2`/`AC_Allele2`: EA = Allele2) > PLINK2 trio (`A1`+`REF`+`ALT`) > alias table in priority order. `MAF` is never mapped to EAF.
+2. **Effects**: β = ln(OR); z(P) = −Φ⁻¹(P/2); SE = |β|/z(P); P = 2Φ(−|β/SE|). The symmetric forms keep precision in the tails (1 − P/2 rounds to 1.0 below P ≈ 1e-16). From Z alone: β = z/√(2p(1−p)(n+z²)), SE = 1/√(2p(1−p)(n+z²)) with p = EAF (Zhu et al. 2016); this is a per-SD scale, so a Z file without EAF and N is refused.
+3. **Palindromic QC** (`ambiguous`, default): drop A/T and C/G SNVs when EAF is missing or 0.4 ≤ EAF ≤ 0.6.
+4. **Alignment** to reference (REF, ALT): EA/NEA = ALT/REF keep; = REF/ALT swap (β → −β, EAF → 1 − EAF); reverse complements: flip strand (then swap if needed); otherwise drop as mismatch. **Palindromes** cannot be classified from alleles (reverse-strand A/T is identical to a forward swap): EA is ALT when EAF and the reference ALT frequency lie on the same side of 0.5, REF otherwise; dropped as `palindromic_unresolved` when either is missing or within 0.4-0.6. Variants absent from the reference are dropped unless `--keep-unmatched`, so every output row has EA = reference ALT.
 5. **λGC** = median(χ²₁) / 0.4549 on the harmonized variants.
 
 ## Example Queries
@@ -190,11 +190,11 @@ Expected output: four harmonized tables (194-196 variants each) whose aligned BE
 ```markdown
 # GWAS Summary Statistics Harmonization Report
 
-**Datasets**: 4 · **Engine**: snakemake · **Reference**: reference.tsv
+**Datasets**: 5 · **Engine**: snakemake · **Reference**: reference.tsv
 
 | Dataset | Rows in | Rows out | Dropped | Swapped | Strand-flipped | EAF filled | λGC |
 |---------|--------:|---------:|--------:|--------:|---------------:|-----------:|----:|
-| `cohort_ssf` | 201 | 194 | 7 | 39 | 12 | 10 | 1.1742 |
+| `cohort_ssf` | 201 | 194 | 7 | 39 | 15 | 10 | 1.1742 |
 | `cohort_plink2` | 200 | 196 | 4 | 65 | 0 | 0 | 1.1742 |
 
 ### cohort_plink2 (PLINK2 --glm logistic output)
@@ -234,9 +234,12 @@ output_directory/
 ## Gotchas
 
 - **MAF is not EAF.** You will want to map a `MAF` column to EAF. Do not: MAF is not tied to the effect allele, so for half the variants it is 1 − EAF. The skill leaves EAF empty and notes it; fill it from a reference instead.
+- **SAIGE's effect allele is Allele2.** You will want to read `Allele1` as the effect allele, as in METAL and BOLT. Do not: SAIGE reports BETA and `AF_Allele2` for Allele2, so that mapping reverses every sign and no reference step can undo it. Detection keys on `AF_Allele2`/`AC_Allele2`; if a SAIGE file has neither, pass `--columns`.
+- **Palindromic SNVs need frequencies, not alleles.** You will want to align A/T and C/G variants like any other. Do not: reverse-strand A/T looks exactly like a forward-strand swap, so allele matching negates BETA. Only EAF vs the reference AF resolves strand; a reference without `AF` drops every palindrome at alignment.
+- **PLINK covariate rows look like variants.** You will want to keep every row of a PLINK `--glm` file. Do not: covariate rows (`TEST` = SEX, PC1, ...) share the variant's CHR:BP and often have a tiny P, so deduplication would keep the covariate. Only `TEST == ADD` is kept.
 - **PLINK2's A1 is not always ALT.** You will want to treat `ALT` as the effect allele. Do not: in PLINK2 `--glm` output the tested allele is `A1`, which can be REF. Swapping on the wrong allele silently reverses the effect direction for those variants.
 - **Filling EAF from a reference must be allele-matched.** You will want to copy the reference AF into missing EAF. Only do it after alignment, when EA is the reference ALT; otherwise the frequency belongs to the other allele for swapped variants.
-- **Same genome build or nothing.** A GRCh37 file against a GRCh38 reference matches almost nothing by position, and unmatched variants are kept silently unless `--drop-unmatched`. The script warns when over half are unmatched; confirm the build (for example via a few rsIDs) before trusting alignment, and lift over first if needed.
+- **Same genome build or nothing.** A GRCh37 file against a GRCh38 reference matches almost nothing by position, and every unmatched variant is dropped (or kept unaligned with `--keep-unmatched`). The script warns when over half are unmatched. Pass `--build` to record the build; it is checked against build-labelled columns (`BP_hg19`, `pos_b38`). Confirm the build (for example via a few rsIDs) before trusting alignment, and lift over first if needed.
 - **Tiny p-values.** You will want to `float()` p-values. Values below about 1e-308 become 0 and are then dropped as invalid. The skill keeps them as exact strings; keep that behaviour in any downstream parsing.
 - **Cross-cohort sample overlap is invisible here.** Harmonized files from cohorts that share participants will double-count evidence in a meta-analysis. Check overlap before combining.
 - **λGC on a few hundred variants is not genome-wide inflation.** Report it as a sanity check only; use LDSC for confounding vs polygenicity.

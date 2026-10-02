@@ -8,13 +8,16 @@ real-world summary-statistics conventions, each seeded with the problems the
 harmonizer must handle:
 
   cohort_ssf.tsv              GWAS-Catalog SSF columns; ~20% alleles swapped vs the
-                              reference, some strand-flipped, some EAF missing,
-                              a duplicate row, invalid p-values
+                              reference, some strand-flipped (palindromic A/T, C/G
+                              rows included, so only EAF can resolve them), some
+                              EAF missing, a duplicate row, invalid p-values
   cohort_plink2.glm.logistic  PLINK2 REF/ALT/A1 trio (A1 is sometimes REF), OR only
   cohort_metal.tbl            METAL: no CHR/BP (MarkerName "chr:pos"), lowercase
                               alleles
   cohort_regenie.regenie      REGENIE ALLELE0/ALLELE1 with LOG10P only, including
                               one p-value far below the float64 minimum
+  cohort_saige.txt            SAIGE step 2: BETA and AF_Allele2 refer to Allele2
+                              (= ALT), the opposite of METAL/BOLT's Allele1
 
 Example:
     python skills/gwas-sumstats-harmonize/examples/make_demo_data.py
@@ -74,7 +77,9 @@ def main() -> None:
         palin = COMPLEMENT[t["REF"]] == t["ALT"]
         if i % 5 == 1:
             ea, nea, beta, eaf = nea, ea, -beta, round(1 - eaf, 4)
-        if i % 17 == 2 and not palin:
+        # Reverse strand. For A/T and C/G this is indistinguishable from a swap
+        # by alleles alone; only EAF vs the reference AF can tell them apart.
+        if i % 17 == 2 or (palin and i % 2 == 1):
             ea, nea = COMPLEMENT[ea], COMPLEMENT[nea]
         p = f"{_p(beta, t['SE']):.4g}"
         eaf_s = "" if i % 20 == 4 else eaf
@@ -118,6 +123,16 @@ def main() -> None:
     _write(HERE / "cohort_regenie.regenie",
            ["CHROM", "GENPOS", "ID", "ALLELE0", "ALLELE1", "A1FREQ", "N", "BETA", "SE",
             "LOG10P"], regenie)
+
+    # SAIGE step 2: Allele1 = REF, Allele2 = ALT; BETA and AF_Allele2 are for Allele2
+    saige = []
+    for t in truth:
+        saige.append([t["CHR"], t["BP"], t["rsid"], t["REF"], t["ALT"], round(2 * 9000 * t["AF"]), t["AF"],
+                      0, t["BETA"], t["SE"], round(t["BETA"] / t["SE"], 4), round(1 / t["SE"] ** 2, 2),
+                      f"{_p(t['BETA'], t['SE']):.4g}", 9000])
+    _write(HERE / "cohort_saige.txt",
+           ["CHR", "POS", "MarkerID", "Allele1", "Allele2", "AC_Allele2", "AF_Allele2", "MissingRate",
+            "BETA", "SE", "Tstat", "var", "p.value", "N"], saige)
 
 
 if __name__ == "__main__":

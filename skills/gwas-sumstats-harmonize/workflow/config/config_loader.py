@@ -32,7 +32,9 @@ _DEFAULTS = {
     "map_columns": {},
     "derive_effects": {},
     "qc_filter": {"palindromic": "ambiguous", "min_maf": 0.0, "keep_indels": True},
-    "align_reference": {"drop_unmatched": False},
+    # With a reference, unmatched rows are dropped by default so every output
+    # row really has EA = reference ALT. Without one the stage passes through.
+    "align_reference": {"drop_unmatched": True},
 }
 
 

@@ -140,7 +140,7 @@ def write_run_config(output_dir: Path, datasets: dict, reference: str | None, ar
         "map_columns": {},
         "derive_effects": {},
         "qc_filter": {"palindromic": args.palindromic, "min_maf": args.min_maf, "keep_indels": not args.drop_indels},
-        "align_reference": {"drop_unmatched": args.drop_unmatched},
+        "align_reference": {"drop_unmatched": not args.keep_unmatched},
     }
     software = {"threads": args.cores}
     header = "# Written by gwas_sumstats_harmonize.py for this run; read only by workflow/config/config_loader.py\n"
@@ -264,9 +264,12 @@ def collect_results(cfg: dict, output_dir: Path) -> dict:
         a = _summary(out, "align_reference", name)
         pvals = [row["P"] for row in _lib.read_table(str(final))]
         alignment = dict(a["alignment"])
-        dropped = dict(q["dropped"])
+        dropped = dict(m.get("dropped", {}))
+        dropped.update(q["dropped"])
         if alignment.get("mismatch"):
             dropped["allele_mismatch"] = alignment["mismatch"]
+        if alignment.get("palindromic_unresolved"):
+            dropped["palindromic_unresolved"] = alignment["palindromic_unresolved"]
         if a["params"]["drop_unmatched"] and alignment.get("not_in_reference"):
             dropped["not_in_reference"] = alignment["not_in_reference"]
         results[name] = {
@@ -275,6 +278,7 @@ def collect_results(cfg: dict, output_dir: Path) -> dict:
             "output": final.relative_to(output_dir).as_posix(),
             "rows_in": m["rows_in"],
             "rows_out": a["rows_out"],
+            "build": m.get("build") or cfg_build(cfg),
             "mapping": m["mapping"],
             "notes": m["notes"],
             "derived": d["derived"],
@@ -283,6 +287,18 @@ def collect_results(cfg: dict, output_dir: Path) -> dict:
             "lambda_gc": round(_lib.lambda_gc(pvals), 4) if pvals else None,
         }
     return results
+
+
+def cfg_build(cfg: dict) -> str | None:
+    return cfg.get("declared_build")
+
+
+def check_builds(results: dict, declared: str | None) -> None:
+    """A declared build that contradicts a build-labelled column is an error, not a guess."""
+    for name, v in results.items():
+        if declared and v["build"] and v["build"] != declared:
+            raise RunError(f"dataset '{name}': --build {declared} contradicts its column names, "
+                           f"which say {v['build']} ({v['mapping'].get('BP')})")
 
 
 def write_summary_table(output_dir: Path, results: dict) -> Path:
@@ -306,16 +322,26 @@ def write_summary_table(output_dir: Path, results: dict) -> Path:
 
 def write_report(output_dir: Path, results: dict, reference: str | None, engine: str, cfg: dict) -> Path:
     qc = cfg["analysis"]["qc_filter"]
+    drop_unmatched = cfg["analysis"]["align_reference"]["drop_unmatched"]
+    unaligned = sum(v["alignment"].get("not_in_reference", 0) for v in results.values())
+    if not reference:
+        ea_note = "."
+    elif drop_unmatched or not unaligned:
+        ea_note = " (EA = reference ALT)."
+    else:
+        ea_note = (f". EA = reference ALT for matched variants; {unaligned} variant(s) absent from the "
+                   "reference were kept as reported and are not aligned (--keep-unmatched).")
+    builds = sorted({v["build"] for v in results.values() if v["build"]})
     lines = [
         "# GWAS Summary Statistics Harmonization Report",
         "",
         f"**Date**: {date.today().isoformat()}  ",
         f"**Datasets**: {len(results)} · **Engine**: {engine} · "
         f"**Reference**: {Path(reference).name if reference else 'none (alleles not aligned)'}  ",
-        f"**QC**: palindromic={qc['palindromic']}, min_maf={qc['min_maf']}, keep_indels={qc['keep_indels']}",
+        f"**QC**: palindromic={qc['palindromic']}, min_maf={qc['min_maf']}, keep_indels={qc['keep_indels']}  ",
+        f"**Genome build**: {', '.join(builds) if builds else 'not declared and not in the column names; confirm it matches the reference'}",
         "",
-        "Canonical output columns: `SNP CHR BP EA NEA EAF BETA SE P N`"
-        + (" (EA = reference ALT)." if reference else "."),
+        "Canonical output columns: `SNP CHR BP EA NEA EAF BETA SE P N`" + ea_note,
         "",
         "## Summary",
         "",
@@ -346,7 +372,10 @@ def write_report(output_dir: Path, results: dict, reference: str | None, engine:
         "",
         "- λGC is computed on the harmonized variants only. On a small or pre-filtered file it is",
         "  not an estimate of genome-wide inflation; use LD score regression for that.",
-        "- Palindromic A/T and C/G variants are aligned on the forward strand only.",
+        "- Palindromic A/T and C/G variants are strand-resolved by comparing EAF with the reference",
+        "  ALT frequency, and dropped (palindromic_unresolved) when either is missing or within 0.4-0.6.",
+        "  Without a reference they are passed through as reported, not strand-checked.",
+        "- BETA_SE_from_Z, when present, is on the standardised (per-SD) scale, not the original trait scale.",
         "- p-values below the float64 minimum (about 1e-308) are kept as exact strings.",
         "",
         "---",
@@ -373,7 +402,10 @@ def parse_args(argv=None):
                    help="Drop palindromic SNVs: ambiguous (EAF missing or 0.4-0.6, default), all, none")
     p.add_argument("--min-maf", type=float, default=0.0, help="Drop variants with MAF below this (default 0)")
     p.add_argument("--drop-indels", action="store_true", help="Drop multi-base alleles")
-    p.add_argument("--drop-unmatched", action="store_true", help="Drop variants absent from the reference")
+    p.add_argument("--keep-unmatched", action="store_true",
+                   help="Keep variants absent from the reference, unaligned (default: drop them)")
+    p.add_argument("--build", choices=["GRCh37", "GRCh38"],
+                   help="Genome build of the input positions; recorded, and checked against build-labelled columns")
     p.add_argument("--engine", choices=["auto", "snakemake", "python"], default="auto",
                    help="Run with Snakemake (if installed) or plain Python; output is identical")
     p.add_argument("--cores", type=int, default=1, help="Cores for the Snakemake engine")
@@ -388,12 +420,14 @@ def main(argv=None) -> int:
         output_dir.mkdir(parents=True, exist_ok=True)
         config_dir = write_run_config(output_dir, datasets, reference, args)
         cfg = _config_loader.load_config(str(config_dir))
+        cfg["declared_build"] = args.build
         engine = choose_engine(args.engine)
         if engine == "snakemake":
             run_snakemake_engine(cfg, output_dir, config_dir, args.cores)
         else:
             run_python_engine(cfg)
         results = collect_results(cfg, output_dir)
+        check_builds(results, args.build)
     except (RunError, _config_loader.ConfigError, OSError, yaml.YAMLError, KeyError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -406,6 +440,7 @@ def main(argv=None) -> int:
         "version": SKILL_VERSION,
         "engine": engine,
         "reference": cfg["analysis"]["resources"]["reference"],
+        "build": args.build,
         "settings": {"qc_filter": cfg["analysis"]["qc_filter"], "align_reference": cfg["analysis"]["align_reference"]},
         "datasets": results,
     }, indent=2), encoding="utf-8")

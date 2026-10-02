@@ -9,6 +9,9 @@ canonical columns (SNP CHR BP EA NEA EAF BETA SE P N).
   - P:    from LOG10P (exact string, survives float underflow), else from Z,
           else from BETA/SE
   - BETA: ln(OR) when only an odds ratio is given
+  - BETA, SE from Z, EAF and N when there is no BETA or OR: the standardised
+          (per-SD) scale of Zhu et al. 2016, b = z / sqrt(2p(1-p)(n + z^2)),
+          se = 1 / sqrt(2p(1-p)(n + z^2)); rows without EAF or N stay empty
   - SE:   |BETA| / z(P) when missing
   - SNP:  CHR:BP:NEA:EA when missing
 NA-like tokens (NA, nan, ., null) become empty. Nothing is dropped here;
@@ -31,7 +34,7 @@ from decimal import InvalidOperation
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "lib"))
 from harmonize_lib import (  # noqa: E402
-    CANONICAL, fmt, is_missing, normalize_chr, p_from_beta_se, p_from_log10p, p_from_z,
+    CANONICAL, beta_se_from_z, fmt, is_missing, normalize_chr, p_from_beta_se, p_from_log10p, p_from_z,
     read_table, se_from_beta_p, to_float, valid_p, write_table,
 )
 
@@ -75,6 +78,11 @@ def derive(row, counts):
             beta = math.log(or_)
             out["BETA"] = fmt(beta)
             counts["BETA_from_OR"] += 1
+    z, eaf, n = to_float(row.get("Z")), to_float(out["EAF"]), to_float(out["N"])
+    if beta is None and z is not None and eaf is not None and 0 < eaf < 1 and n is not None and n > 0:
+        beta, se_z = beta_se_from_z(z, eaf, n)
+        out["BETA"], out["SE"] = fmt(beta), fmt(se_z)
+        counts["BETA_SE_from_Z"] += 1
 
     se = to_float(out["SE"])
     p = to_float(out["P"])
