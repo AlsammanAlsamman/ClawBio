@@ -9,6 +9,7 @@ internally consistent and runnable.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import py_compile
@@ -16,6 +17,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tokenize
 from pathlib import Path
 
 import pytest
@@ -55,6 +57,11 @@ def demo_out(tmp_path_factory):
 @pytest.fixture(scope="module")
 def demo_project(demo_out):
     return demo_out / DEMO_PROJECT
+
+
+def _tokens(path: Path) -> list[tokenize.TokenInfo]:
+    with open(path, "rb") as fh:
+        return list(tokenize.tokenize(fh.readline))
 
 
 def _load_generated_config(project: Path, config_dir: Path | None = None):
@@ -134,6 +141,11 @@ class TestProjectLayout:
         for py in demo_project.rglob("*.py"):
             py_compile.compile(str(py), doraise=True)
 
+    def test_snakefile_and_rules_tokenize(self, demo_project):
+        """Snakemake syntax is Python-tokenizable; this catches broken literals without Snakemake."""
+        for path in [demo_project / "Snakefile", *(demo_project / "rules").glob("*.smk")]:
+            _tokens(path)
+
     def test_all_yaml_parses(self, demo_project):
         for y in (demo_project / "config").glob("*.yaml"):
             yaml.safe_load(y.read_text())
@@ -153,7 +165,7 @@ class TestConventions:
         assert "PYTHON = sys.executable" in snakefile
         for smk in (demo_project / "rules").glob("*.smk"):
             text = smk.read_text()
-            assert '"{PYTHON}" scripts/' in text
+            assert "'{PYTHON:q} scripts/" in text
             assert "'python " not in text and '"python ' not in text
 
     def test_downstream_stage_depends_on_upstream_sentinel(self, demo_project):
@@ -181,7 +193,7 @@ class TestConventions:
         assert analysis["filter_pvalue"] == {"p_threshold": 5e-08}
         smk = (demo_project / "rules" / "filter_maf.smk").read_text()
         assert '_item_analysis(wc.dataset, "filter_maf")["maf"]' in smk
-        assert '--maf "{params.maf}"' in smk
+        assert "--maf {params.maf:q}" in smk
 
 
 # ── Generated project: config_loader.py ───────────────────────────────────────
@@ -356,6 +368,154 @@ class TestSpecValidation:
         assert result.returncode != 0
 
 
+# ── Hostile specs: spec text must never become code (PR #525 review) ──────────
+
+# Every payload creates a PWNED_* file if it ever runs. Each payload keeps
+# "open(" and "PWNED" together, so a payload that stays inert sits inside one
+# STRING or COMMENT token.
+_PAYLOAD = "open('PWNED_{}', 'w')"
+_BREAKOUTS = ['"""\n{p}\n"""', "'''\n{p}\n'''", '\\"); {p}; ("', '\\', '$({p})', '`{p}`', '@@ARGPARSE@@ @@INCLUDES@@']
+
+
+def _hostile(tag: str) -> str:
+    payload = _PAYLOAD.format(tag)
+    return " ".join(b.format(p=payload) for b in _BREAKOUTS) + " " + payload + " \\"
+
+
+def _hostile_line(tag: str) -> str:
+    """Single-line variant, for values that reach a command line (newlines are rejected there)."""
+    return _hostile(tag).replace("\n", " ")
+
+
+def _hostile_spec(path: str | None = None) -> dict:
+    return {
+        "project": "hostile",
+        "description": _hostile("desc"),
+        "items": {"entries": {"a": {"path": path or "input/a " + _hostile_line("path") + ".tsv",
+                                    "label": _hostile("label"), "description": _hostile("itemdesc")}}},
+        "stages": [
+            {"name": "first", "description": _hostile("stage1"),
+             "params": {"txt": _hostile_line("param"), "trail": "ends with backslash \\", "n": 3}},
+            {"name": "second", "description": "trailing backslash \\", "params": {"flag": True}},
+        ],
+    }
+
+
+def _scaffold(tmp_path, spec, *extra):
+    p = tmp_path / "spec.yaml"
+    p.write_text(yaml.safe_dump(spec), encoding="utf-8")
+    out = tmp_path / "out"
+    result = run_cli(["--input", str(p), "--output", str(out), *extra])
+    assert result.returncode == 0, result.stderr
+    return out / spec["project"]
+
+
+def _pwned(root: Path) -> list[Path]:
+    return [p for p in root.rglob("PWNED_*")]
+
+
+class TestHostileSpec:
+    def test_generated_sources_keep_spec_text_inert(self, tmp_path):
+        proj = _scaffold(tmp_path, _hostile_spec())
+        sources = [proj / "Snakefile", *proj.glob("rules/*.smk"), *proj.rglob("*.py")]
+        assert len(sources) >= 6
+        for path in sources:
+            for tok in _tokens(path):
+                if "PWNED" in tok.string:
+                    assert tok.type in (tokenize.STRING, tokenize.COMMENT), (path.name, tok)
+                    assert "open(" in tok.string, (path.name, tok)
+        for py in proj.rglob("*.py"):
+            ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
+
+    def test_stage_scripts_help_runs_without_side_effects(self, tmp_path):
+        proj = _scaffold(tmp_path, _hostile_spec())
+        for script in proj.glob("scripts/*.py"):
+            r = subprocess.run([sys.executable, str(script), "--help"], cwd=proj, capture_output=True, text=True)
+            assert r.returncode == 0, r.stderr
+        assert _pwned(tmp_path) == []
+
+    def test_spec_text_round_trips_into_yaml(self, tmp_path):
+        spec = _hostile_spec()
+        proj = _scaffold(tmp_path, spec)
+        analysis = yaml.safe_load((proj / "config" / "analysis.yaml").read_text(encoding="utf-8"))
+        assert analysis["first"]["txt"] == spec["stages"][0]["params"]["txt"]
+        assert analysis["first"]["trail"].endswith("\\")
+        data = yaml.safe_load((proj / "config" / "data.yaml").read_text(encoding="utf-8"))
+        # Item paths are normalised to forward slashes; otherwise verbatim.
+        assert data["datasets"]["a"]["path"] == spec["items"]["entries"]["a"]["path"].replace("\\", "/")
+
+    @pytest.mark.parametrize("value", ["/abs/results", "C:/results", "C:\\results", "../results",
+                                       "results/../../x", "", "\\\\server\\share"])
+    def test_output_dir_must_stay_inside_project(self, tmp_path, value):
+        p = tmp_path / "spec.yaml"
+        p.write_text(yaml.safe_dump({"project": "p", "stages": ["a"], "output_dir": value}))
+        r = run_cli(["--input", str(p), "--output", str(tmp_path / "out")])
+        assert r.returncode != 0
+        assert "output_dir" in r.stderr
+
+    @pytest.mark.parametrize("where", ["param", "path"])
+    @pytest.mark.parametrize("char", ["\n", "\r", "\x00", "\x1b"])
+    def test_control_characters_rejected_in_command_line_values(self, tmp_path, where, char):
+        """Params and item paths become command-line arguments; on Windows cmd a newline ends the command."""
+        spec = {"project": "p", "stages": [{"name": "a", "params": {"x": "ok"}}],
+                "items": {"entries": {"i": {"path": "input/i.tsv"}}}}
+        if where == "param":
+            spec["stages"][0]["params"]["x"] = f"line1{char}line2"
+        else:
+            spec["items"]["entries"]["i"]["path"] = f"input/i{char}.tsv"
+        p = tmp_path / "spec.yaml"
+        p.write_text(yaml.safe_dump(spec))
+        r = run_cli(["--input", str(p), "--output", str(tmp_path / "out")])
+        assert r.returncode != 0
+        assert "control character" in r.stderr
+
+    def test_relative_output_dir_accepted(self, tmp_path):
+        p = tmp_path / "spec.yaml"
+        p.write_text(yaml.safe_dump({"project": "p", "stages": ["a"], "output_dir": "results/run1"}))
+        assert run_cli(["--input", str(p), "--output", str(tmp_path / "out")]).returncode == 0
+
+    def test_shell_arguments_use_snakemake_quoting(self, tmp_path):
+        proj = _scaffold(tmp_path, _hostile_spec())
+        text = (proj / "rules" / "first.smk").read_text(encoding="utf-8")
+        for field in ("{input.data:q}", "{output.result:q}", "{output.summary:q}", "{params.txt:q}",
+                      "{params.trail:q}", "{params.n:q}", "{log:q}"):
+            assert field in text, field
+        assert '"{input.data}"' not in text and '"{params.txt}"' not in text
+
+
+class TestOutputGuard:
+    def test_refuses_to_overwrite_existing_report(self, tmp_path):
+        out = tmp_path / "out"
+        out.mkdir()
+        (out / "report.md").write_text("earlier report")
+        r = run_cli(["--name", "q", "--stages", "a", "--output", str(out)])
+        assert r.returncode != 0
+        assert "--force" in r.stderr
+        assert (out / "report.md").read_text() == "earlier report"
+        assert not (out / "q").exists()
+
+    @pytest.mark.parametrize("existing", ["result.json", "reproducibility"])
+    def test_refuses_other_existing_outputs(self, tmp_path, existing):
+        out = tmp_path / "out"
+        (out / existing).mkdir(parents=True)
+        r = run_cli(["--name", "q", "--stages", "a", "--output", str(out)])
+        assert r.returncode != 0
+
+    def test_force_overwrites_report(self, tmp_path):
+        out = tmp_path / "out"
+        out.mkdir()
+        (out / "report.md").write_text("earlier report")
+        r = run_cli(["--name", "q", "--stages", "a", "--output", str(out), "--force"])
+        assert r.returncode == 0, r.stderr
+        assert "Snakemake Bio Scaffold Report" in (out / "report.md").read_text(encoding="utf-8")
+
+    def test_unrelated_files_in_output_are_fine(self, tmp_path):
+        out = tmp_path / "out"
+        out.mkdir()
+        (out / "notes.txt").write_text("mine")
+        assert run_cli(["--name", "q", "--stages", "a", "--output", str(out)]).returncode == 0
+
+
 class TestModuleApi:
     def test_validate_spec_fills_defaults(self):
         mod = _load_module()
@@ -447,6 +607,29 @@ class TestSnakemakeIntegration:
             for item in ("cohort_a", "cohort_b"):
                 assert (proj / "results" / "done" / f"{stage}_{item}.done").exists()
                 assert (proj / "results" / stage / f"{item}.summary.json").exists()
+
+    def test_hostile_spec_runs_without_side_effects(self, tmp_path):
+        """Full run of a hostile spec: nothing executes, and odd param values reach the script verbatim."""
+        spec = _hostile_spec(path="input/a.tsv")
+        odd = "a b $(echo X) `echo Y` \"q\" 'r' ; & | > x"
+        spec["stages"][1]["params"]["odd"] = odd
+        proj = _scaffold(tmp_path, spec)
+        (proj / "input" / "a.tsv").write_text("SNP\tP\nrs1\t0.5\n")
+        dry = subprocess.run([sys.executable, "-m", "snakemake", "-n", "--cores", "1"],
+                             cwd=proj, capture_output=True, text=True)
+        assert dry.returncode == 0, dry.stdout + dry.stderr
+        assert _pwned(tmp_path) == []
+        result = subprocess.run(
+            [sys.executable, "-m", "snakemake", "--cores", "1", "--drop-metadata"],
+            cwd=proj, capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert _pwned(tmp_path) == []
+        first = json.loads((proj / "results" / "first" / "a.summary.json").read_text())
+        assert first["params"]["txt"] == spec["stages"][0]["params"]["txt"]
+        assert first["params"]["trail"] == "ends with backslash \\"
+        second = json.loads((proj / "results" / "second" / "a.summary.json").read_text())
+        assert second["params"]["odd"] == odd
 
     def test_check_flag_records_dry_run(self, tmp_path):
         result = run_cli(["--demo", "--output", str(tmp_path), "--check"])

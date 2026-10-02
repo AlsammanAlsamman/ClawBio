@@ -121,13 +121,13 @@ You are **Snakemake Bio Scaffold**, a specialised ClawBio agent for workflow eng
 | Scaffold spec | `.yaml` | `project`, `stages[].name` | `examples/demo_spec.yaml` |
 | Quick mode flags | n/a | `--name`, `--stages` (comma list) | `--name rnaseq --stages align,count` |
 
-Spec fields (defaults in brackets): `project`; `description`; `items.key` [`datasets`], `items.wildcard` [`dataset`], `items.entries.<name>.{path, label, columns, overrides}`; `stages[].{name, description, ext [tsv], params}`; `software.<tool>: <path or name>`; `output_dir` [`results`].
+Spec fields (defaults in brackets): `project`; `description`; `items.key` [`datasets`], `items.wildcard` [`dataset`], `items.entries.<name>.{path, label, columns, overrides}`; `stages[].{name, description, ext [tsv], params}`; `software.<tool>: <path or name>`; `output_dir` [`results`], a relative path inside the project (absolute paths, drives and `..` are refused). Param values and item paths become command-line arguments, so control characters (newlines, tabs, NUL) in them are refused.
 
 ## Workflow
 
 1. **Validate (prescriptive)**: names are lower_snake_case, no Python keywords or Snakemake reserved words (`all`, `input`, `params`, ...), no duplicate stages, no null params, overrides only reference existing stages/params. Reject with a clear message; never guess a fix.
 2. **Render (prescriptive)**: emit the files listed under Output Structure. Stage *i* reads stage *i-1*'s output and its done-sentinel; stage 1 reads the item's `path`. `rule all` requests the last stage's sentinel for every target.
-3. **Write (prescriptive)**: refuse a non-empty project directory unless `--force`; `--force` overwrites scaffold files only and never deletes other files.
+3. **Write (prescriptive)**: refuse a non-empty project directory, or an `--output` that already holds `report.md`, `result.json` or `reproducibility/`, unless `--force`; `--force` overwrites scaffold files and the report only and never deletes other files. Spec text never goes into a string literal or docstring: free text (descriptions) becomes `#` comments, values reach Python through `repr()`, YAML through `yaml.safe_dump`, and the shell through Snakemake's `{...:q}` quoting.
 4. **Check (optional)**: with `--check`, run `snakemake -n --cores 1` in the project and record pass/fail.
 5. **Report (flexible)**: write `report.md` + `result.json` + reproducibility bundle; explain next steps to the user in plain language.
 
@@ -239,7 +239,9 @@ output_directory/
 - **Editing a script does not rerun its rule.** You will want to tell the user "just rerun snakemake" after they change `scripts/<stage>.py`. Do not. Snakemake tracks the rule's text, not the content of the script it calls; tell them `snakemake --cores N -R <stage>`.
 - **A done-sentinel can outlive its output.** You will want to delete only `results/<stage>/...` to force a recompute. Do not. The `results/done/<stage>_<item>.done` file keeps the DAG believing the stage is finished; delete both, or use `-R`.
 - **Shared inputs cascade.** You will want to put a sample list or region file that every job reads into `input:`. Think first: touching it invalidates every completed job that declares it, including expensive ones. When adding one new item, build only its targets (`snakemake results/done/<last>_<item>.done`), not bare `snakemake`.
-- **Never call bare `python` in `shell:`.** It can resolve to a different environment than the one running Snakemake. The scaffold's `"{PYTHON}"` (`sys.executable`) exists for this reason; keep it when editing rules.
+- **Never call bare `python` in `shell:`.** It can resolve to a different environment than the one running Snakemake. The scaffold's `{PYTHON:q}` (`sys.executable`) exists for this reason; keep it when editing rules.
+- **Spec text is untrusted input to generated code.** You will want to drop a description or a setting into a docstring or `"..."` literal in a template. Do not: `"""`, a trailing backslash or a quote ends the literal and the rest of the text runs as code, including on `snakemake -n` and `--help`. Put free text in `#` comments and values through `repr()` / `yaml.safe_dump`; the hostile-spec tests tokenize every generated file to enforce this.
+- **Quote shell fields with `:q`, not `"..."`.** You will want to write `--x "{params.x}"`. Do not: `$(...)` and backticks still expand inside double quotes. Use `{params.x:q}`, `{input.data:q}`, `{log:q}`.
 - **Windows paths.** Backslash paths mixed with forward-slash rule patterns can make Snakemake miss the producing rule (spurious `MissingInputException`), so the loader normalises to `/`. Relative CLI targets can also raise `MissingRuleException`; use absolute targets. Deep project paths can overflow MAX_PATH in `.snakemake/metadata`; keep projects short-pathed or use `--drop-metadata`.
 - **SLURM time limits stack.** Raising a rule's `runtime` does not help if the controller job that launches Snakemake has a smaller `--time`; check both.
 - **Do not invent analysis logic in the stubs.** The skill's job ends at a correct skeleton; implementing `process()` is a separate, explicit step with the user.
@@ -249,7 +251,8 @@ output_directory/
 - **Local-first**: generates files locally; no data is read or uploaded (the demo uses synthetic summary statistics only).
 - **Disclaimer**: every report includes the ClawBio medical disclaimer.
 - **Audit trail**: the reproducibility bundle records the command and checksums of every generated file.
-- **No overwrite surprises**: refuses non-empty project directories unless `--force`.
+- **No overwrite surprises**: refuses non-empty project directories and an earlier report in `--output` unless `--force`.
+- **No code from specs**: spec text is never placed in a Python string literal or docstring (see Gotchas).
 
 ## Agent Boundary
 

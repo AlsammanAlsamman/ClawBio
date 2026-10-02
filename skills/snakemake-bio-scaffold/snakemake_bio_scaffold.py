@@ -34,8 +34,9 @@ import re
 import shlex
 import subprocess
 import sys
+import unicodedata
 from datetime import date
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import yaml
 
@@ -77,6 +78,14 @@ class SpecError(ValueError):
 # ── Spec handling ─────────────────────────────────────────────────────────────
 
 
+def _check_single_line(value: str, what: str) -> str:
+    """Values that become command-line arguments must not hold control characters:
+    on Windows cmd a newline ends the command, whatever the quoting."""
+    if any(unicodedata.category(ch) == "Cc" for ch in value):
+        raise SpecError(f"{what} contains a control character (newline, tab, NUL, ...); use plain text")
+    return value
+
+
 def _check_ident(value, what: str) -> str:
     if not isinstance(value, str) or not _IDENT_RE.match(value) or keyword.iskeyword(value):
         raise SpecError(
@@ -112,7 +121,7 @@ def validate_spec(raw: dict) -> dict:
         if not entry.get("path"):
             raise SpecError(f"item '{name}' is missing required key 'path'")
         entries[name] = {
-            "path": str(entry["path"]).replace("\\", "/"),
+            "path": _check_single_line(str(entry["path"]), f"item '{name}' path").replace("\\", "/"),
             "label": entry.get("label", name),
             "description": entry.get("description", ""),
             "columns": entry.get("columns") or {},
@@ -144,6 +153,8 @@ def validate_spec(raw: dict) -> dict:
                 )
             if not isinstance(value, (bool, int, float, str)):
                 raise SpecError(f"stage '{name}' param '{key}' must be a scalar")
+            if isinstance(value, str):
+                _check_single_line(value, f"stage '{name}' param '{key}'")
         ext = str(s.get("ext", "tsv")).lstrip(".")
         if not re.match(r"^[A-Za-z0-9][A-Za-z0-9.]*$", ext):
             raise SpecError(f"stage '{name}' ext '{ext}' is not a valid file extension")
@@ -174,8 +185,23 @@ def validate_spec(raw: dict) -> dict:
         "items": {"key": items_key, "wildcard": wildcard, "entries": entries},
         "stages": stages,
         "software": software,
-        "output_dir": str(raw.get("output_dir", "results")),
+        "output_dir": _check_output_dir(raw.get("output_dir", "results")),
     }
+
+
+def _check_output_dir(value) -> str:
+    """output_dir must be a relative path that stays inside the project.
+
+    Checked with both path flavours, so 'C:/x', '\\\\server\\share' and '/x'
+    are all rejected whichever OS generates or later runs the project.
+    """
+    text = str(value if value is not None else "").strip()
+    win = PureWindowsPath(text)
+    if not text or PurePosixPath(text).is_absolute() or win.drive or win.root or ".." in win.parts:
+        raise SpecError(
+            f"output_dir '{text}' must be a relative path inside the project (no absolute path, drive or '..')"
+        )
+    return win.as_posix()
 
 
 def spec_from_flags(name: str, stages: str, items: str | None) -> dict:
@@ -198,20 +224,39 @@ def spec_from_flags(name: str, stages: str, items: str | None) -> dict:
 # ── Templates ─────────────────────────────────────────────────────────────────
 
 
+_PLACEHOLDER_RE = re.compile(r"@@([A-Z_]+)@@")
+
+
 def _fill(template: str, **values: str) -> str:
-    out = template
-    for key, value in values.items():
-        out = out.replace(f"@@{key}@@", value)
-    leftover = re.findall(r"@@[A-Z_]+@@", out)
-    if leftover:
-        raise RuntimeError(f"unfilled template placeholders: {leftover}")
-    return out
+    """Substitute @@NAME@@ placeholders in ONE pass.
+
+    Single pass matters: spec text that happens to contain "@@ARGPARSE@@" must
+    stay text, not pull generated code into a string literal.
+    """
+    missing = set(_PLACEHOLDER_RE.findall(template)) - set(values)
+    if missing:
+        raise RuntimeError(f"unfilled template placeholders: {sorted(missing)}")
+    return _PLACEHOLDER_RE.sub(lambda m: values[m.group(1)], template)
+
+
+# Spec text reaches generated Python only in two forms, never pasted into a
+# string literal or docstring: as comment lines (_comment), or as a literal
+# built by repr() (_py_literal).
+
+
+def _comment(text: str, indent: str = "") -> str:
+    """Free text as '#' lines. str.splitlines() splits on every line break
+    Python recognises (and more), so no line can end the comment early."""
+    lines = str(text).replace("\x00", "").splitlines() or [""]
+    return "\n".join(f"{indent}# {line}".rstrip() for line in lines)
+
+
+def _py_literal(text: str) -> str:
+    return repr(str(text))
 
 
 SNAKEFILE_T = '''"""
-Snakefile — @@PROJECT@@ pipeline entry point.
-
-@@DESCRIPTION@@
+Snakefile — @@PROJECT@@ pipeline entry point (description in the comments below).
 
 Pipeline stages (one rule each, in rules/*.smk):
   @@CHAIN@@
@@ -220,6 +265,7 @@ Run:
   snakemake -n --cores 1          # dry run: show what would execute
   snakemake --cores 4             # build every target in analysis.yaml
 """
+@@DESCRIPTION@@
 import os
 import re
 import sys
@@ -257,8 +303,9 @@ rule all:
         [f"{OUT}/done/@@LAST_STAGE@@_{n}.done" for n in TARGETS],
 '''
 
-RULE_T = '''rule @@STAGE@@:
-    """Stage @@N@@: @@DESC@@"""
+RULE_T = '''@@DESC@@
+rule @@STAGE@@:
+    """Stage @@N@@: @@STAGE@@ (description in the comments above)."""
     input:
         data=@@INPUT_EXPR@@,
 @@DONE_INPUT@@    output:
@@ -268,28 +315,23 @@ RULE_T = '''rule @@STAGE@@:
 @@PARAMS_BLOCK@@    log:
         f"{OUT}/logs/@@STAGE@@/{{@@WILDCARD@@}}.log",
     shell:
-        '"{PYTHON}" scripts/@@STAGE@@.py '
-        '--input "{input.data}" --out "{output.result}" --summary-json "{output.summary}" '
-@@PARAM_FLAGS@@        '> "{log}" 2>&1'
+        # :q quotes each value for the shell, so $(...), backticks and quotes
+        # in paths or settings stay literal text.
+        '{PYTHON:q} scripts/@@STAGE@@.py '
+        '--input {input.data:q} --out {output.result:q} --summary-json {output.summary:q} '
+@@PARAM_FLAGS@@        '> {log:q} 2>&1'
 '''
 
 SCRIPT_T = '''#!/usr/bin/env python
 """
-scripts/@@STAGE@@.py
-
-Stage @@N@@: @@DESC@@
+scripts/@@STAGE@@.py — stage @@N@@ of the pipeline (description in the comments below).
 
 SCAFFOLD STUB: process() currently passes every row through unchanged so the
 pipeline runs end to end. Replace its body with the real logic; keep the CLI
 (flags mirror config/analysis.yaml) so the rule in rules/@@STAGE@@.smk keeps
-working.
-
-Example:
-    python scripts/@@STAGE@@.py \\\\
-        --input @@EX_INPUT@@ \\\\
-        --out results/@@STAGE@@/@@EX_ITEM@@.@@EXT@@ \\\\
-        --summary-json results/@@STAGE@@/@@EX_ITEM@@.summary.json@@EX_PARAMS@@
+working. Run with --help for the stage description and an example command.
 """
+@@DESC@@
 import argparse
 import json
 import logging
@@ -303,10 +345,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 PARAMS = [@@PARAM_NAMES@@]
+USAGE = @@USAGE@@
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(description=USAGE, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--input", required=True, help="Input table (tab-separated, optional .gz)")
     p.add_argument("--out", required=True, help="Output table path")
     p.add_argument("--summary-json", required=True, help="Where to write the per-run summary JSON")
@@ -636,7 +679,7 @@ def _render_rule(spec: dict, idx: int) -> str:
         for key in params:
             lines.append(f'        {key}=lambda wc: _item_analysis(wc.{wc}, "{stage["name"]}")["{key}"],')
         params_block = "\n".join(lines) + "\n"
-        flags = " ".join(f'--{k.replace("_", "-")} "{{params.{k}}}"' for k in params)
+        flags = " ".join(f'--{k.replace("_", "-")} {{params.{k}:q}}' for k in params)
         param_flags = f"        '{flags} '\n"
     else:
         params_block = ""
@@ -645,7 +688,7 @@ def _render_rule(spec: dict, idx: int) -> str:
         RULE_T,
         STAGE=stage["name"],
         N=str(idx + 1),
-        DESC=stage["description"].replace('"""', "'''"),
+        DESC=_comment(f"Stage {idx + 1}: {stage['description']}"),
         INPUT_EXPR=input_expr,
         DONE_INPUT=done_input,
         WILDCARD=wc,
@@ -665,12 +708,13 @@ def _argparse_line(key: str, value) -> str:
         typ = "float"
     else:
         typ = "str"
-    # argparse treats % in help as a format directive; quotes would end the literal.
-    default_text = str(value).replace("%", "%%").replace('"', '\\"')
-    return f'    p.add_argument("{flag}", type={typ}, required=True, help="analysis.yaml default: {default_text}")\n'
+    # argparse %-formats help strings, so a literal % must be doubled.
+    help_text = _py_literal("analysis.yaml default: " + str(value).replace("%", "%%"))
+    return f'    p.add_argument("{flag}", type={typ}, required=True, help={help_text})\n'
 
 
-def _render_script(spec: dict, idx: int) -> str:
+def _usage(spec: dict, idx: int) -> str:
+    """The stage's --help text: description plus an example command line."""
     stage = spec["stages"][idx]
     entries = spec["items"]["entries"]
     ex_item = next(iter(entries))
@@ -679,18 +723,28 @@ def _render_script(spec: dict, idx: int) -> str:
     else:
         prev = spec["stages"][idx - 1]
         ex_input = f"results/{prev['name']}/{ex_item}.{prev['ext']}"
-    ex_params = "".join(
-        f" \\\\\n        --{k.replace('_', '-')} {v}" for k, v in stage["params"].items()
-    )
+    name, ext = stage["name"], stage["ext"]
+    out_path = f"results/{name}/{ex_item}.{ext}"
+    summary_path = f"results/{name}/{ex_item}.summary.json"
+    lines = [
+        f"python scripts/{name}.py",
+        "--input " + shlex.quote(ex_input),
+        "--out " + shlex.quote(out_path),
+        "--summary-json " + shlex.quote(summary_path),
+    ] + ["--" + k.replace("_", "-") + " " + shlex.quote(str(v)) for k, v in stage["params"].items()]
+    text = f"Stage {idx + 1}: {stage['description']}\n\nExample:\n    " + " \\\n        ".join(lines)
+    # RawDescriptionHelpFormatter %-formats the description only when it holds "%(prog)".
+    return text.replace("%", "%%") if "%(prog)" in text else text
+
+
+def _render_script(spec: dict, idx: int) -> str:
+    stage = spec["stages"][idx]
     return _fill(
         SCRIPT_T,
         STAGE=stage["name"],
         N=str(idx + 1),
-        DESC=stage["description"].replace('"""', "'''"),
-        EX_INPUT=ex_input,
-        EX_ITEM=ex_item,
-        EXT=stage["ext"],
-        EX_PARAMS=ex_params,
+        DESC=_comment(f"Stage {idx + 1}: {stage['description']}"),
+        USAGE=_py_literal(_usage(spec, idx)),
         PARAM_NAMES=", ".join(f'"{k}"' for k in stage["params"]),
         ARGPARSE="".join(_argparse_line(k, v) for k, v in stage["params"].items()),
     )
@@ -715,7 +769,7 @@ def render_project(spec: dict) -> dict[str, str]:
     files["Snakefile"] = _fill(
         SNAKEFILE_T,
         PROJECT=spec["project"],
-        DESCRIPTION=description,
+        DESCRIPTION=_comment(description),
         CHAIN=_chain(spec),
         ITEMS_KEY=items_key,
         WILDCARD=wc,
@@ -944,7 +998,7 @@ def parse_args(argv=None):
     p.add_argument("--name", help="Quick mode: project name (instead of --input)")
     p.add_argument("--stages", help="Quick mode: comma-separated stage names, in order")
     p.add_argument("--items", help="Quick mode: comma-separated name=path items")
-    p.add_argument("--force", action="store_true", help="Overwrite scaffold files in a non-empty project dir")
+    p.add_argument("--force", action="store_true", help="Overwrite scaffold files in a non-empty project dir and an earlier report in --output")
     p.add_argument("--check", action="store_true", help="Run `snakemake -n` on the generated project")
     return p.parse_args(argv)
 
@@ -963,6 +1017,12 @@ def main(argv=None) -> int:
         spec = validate_spec(raw)
 
         output_dir = Path(args.output).resolve()
+        clobbered = [n for n in ("report.md", "result.json", "reproducibility") if (output_dir / n).exists()]
+        if clobbered and not args.force:
+            raise SpecError(
+                f"{output_dir} already holds {', '.join(clobbered)} from an earlier run; refusing to "
+                "overwrite. Pass --force to overwrite, or choose another --output."
+            )
         output_dir.mkdir(parents=True, exist_ok=True)
         project_dir = output_dir / spec["project"]
         files = render_project(spec)
