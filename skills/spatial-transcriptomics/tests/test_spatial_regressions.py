@@ -21,7 +21,17 @@ import spatial_transcriptomics as st
 
 def _write_h5ad(adata, path):
     import anndata as ad
+    import pandas as pd
 
+    # With pyarrow installed, pandas 3 backs str data with ArrowStringArray,
+    # which anndata 0.12 cannot write to h5ad. Object strings always can.
+    adata = adata.copy()
+    for frame in (adata.obs, adata.var):
+        for column in frame.columns:
+            if isinstance(frame[column].dtype, pd.StringDtype):
+                frame[column] = frame[column].astype(object)
+    adata.obs_names = adata.obs_names.astype(object)
+    adata.var_names = adata.var_names.astype(object)
     ad.settings.allow_write_nullable_strings = True
     adata.write_h5ad(path)
     return path

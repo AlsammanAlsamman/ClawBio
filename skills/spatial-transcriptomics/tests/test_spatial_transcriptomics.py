@@ -34,6 +34,24 @@ def run_cli(args: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _write_h5ad(adata, path):
+    import anndata as ad
+    import pandas as pd
+
+    # With pyarrow installed, pandas 3 backs str data with ArrowStringArray,
+    # which anndata 0.12 cannot write to h5ad. Object strings always can.
+    adata = adata.copy()
+    for frame in (adata.obs, adata.var):
+        for column in frame.columns:
+            if isinstance(frame[column].dtype, pd.StringDtype):
+                frame[column] = frame[column].astype(object)
+    adata.obs_names = adata.obs_names.astype(object)
+    adata.var_names = adata.var_names.astype(object)
+    ad.settings.allow_write_nullable_strings = True
+    adata.write_h5ad(path)
+    return path
+
+
 def _parse_output_contract(skill_md: Path) -> list[str]:
     if not skill_md.exists():
         return []
@@ -104,13 +122,9 @@ def test_nhood_diagonal_is_enriched_for_two_blocks():
 
 
 def test_h5ad_without_spatial_is_rejected(tmp_path):
-    import anndata as ad
-
     adata = st.generate_demo_adata()
     del adata.obsm["spatial"]
-    path = tmp_path / "no_spatial.h5ad"
-    ad.settings.allow_write_nullable_strings = True
-    adata.write_h5ad(path)
+    path = _write_h5ad(adata, tmp_path / "no_spatial.h5ad")
     with pytest.raises(ValueError, match="obsm\\['spatial'\\]"):
         st.load_spatial(path)
 
