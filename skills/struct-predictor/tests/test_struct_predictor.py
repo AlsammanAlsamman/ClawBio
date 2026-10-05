@@ -698,6 +698,17 @@ class TestWriteOpenFold3Query:
         chains = json.loads(write_openfold3_query(prepared["sequences"], "ab", tmp_path).read_text())["queries"]["ab"]["chains"]
         assert [c["chain_ids"] for c in chains] == [["H"], ["L"]]
 
+    @pytest.mark.parametrize("ids", [("", "B"), ("A", "A"), ("A", "A B"), (" ", "B")])
+    def test_rejects_duplicate_or_blank_chain_ids(self, tmp_path, ids):
+        """Found by Hypothesis: user ids now reach the CIF, so they must be unique and non-blank."""
+        yaml_in = tmp_path / "bad.yaml"
+        yaml_in.write_text(
+            "sequences:\n"
+            f"  - protein: {{id: '{ids[0]}', sequence: ACDEFGHIK}}\n"
+            f"  - protein: {{id: '{ids[1]}', sequence: LMNPQRSTV}}\n")
+        with pytest.raises(ValueError, match="[Cc]hain id"):
+            validate_and_prepare(yaml_in, tmp_path / "work")
+
     def test_ligand_without_smiles_or_ccd_raises_clear_error(self, tmp_path):
         seqs = _seqs({"name": "L", "sequence": "CCO", "entity_type": "ligand", "chain_id": "A"})
         with pytest.raises(ValueError, match="Ligand 'L'.*smiles.*ccd"):
@@ -742,6 +753,14 @@ class TestFindOpenFold3Output:
         _fake_of3_output(tmp_path)
         r = _find_openfold3_output(tmp_path, "Trpcage")
         assert r["cif_path"].name == "Trpcage_seed_42_sample_2_model.cif"
+
+    def test_nan_score_never_beats_a_real_score(self, tmp_path):
+        """Found by Hypothesis: max() with a NaN key picks by file order."""
+        for order in ((0.0, float("nan")), (float("nan"), 0.0)):
+            out = tmp_path / str(order.index(0.0))
+            _fake_of3_output(out, scores=order)
+            r = _find_openfold3_output(out, "Trpcage")
+            assert r["cif_path"].name == f"Trpcage_seed_42_sample_{order.index(0.0) + 1}_model.cif"
 
     def test_raises_if_not_found(self, tmp_path):
         _fake_of3_output(tmp_path, name="Older")

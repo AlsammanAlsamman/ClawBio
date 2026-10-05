@@ -49,6 +49,14 @@ def validate_and_prepare(
     sequences = _parse_sequences_from_data(data, input_path)
     _validate_sequences(sequences)
 
+    names = [str(s["name"]) for s in sequences]
+    bad = [n for n in names if not n.strip() or any(c.isspace() for c in n)]
+    if bad:
+        raise ValueError(f"Chain id(s) {bad!r} are blank or contain whitespace.")
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    if dupes:
+        raise ValueError(f"Chain id(s) {dupes} are used more than once; each chain needs a unique id.")
+
     if len(sequences) > 26:
         raise ValueError(
             f"Too many chains ({len(sequences)}). Boltz-2 supports at most 26 chains (A–Z)."

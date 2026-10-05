@@ -7,6 +7,7 @@ confidence JSON in the output directory.
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 from pathlib import Path
 
@@ -161,9 +162,10 @@ def _find_openfold3_output(output_dir: Path, name: str) -> dict:
     def score(cif: Path) -> float:
         agg = cif.with_name(cif.name.replace("_model.cif", "_confidences_aggregated.json"))
         try:
-            return float(json.loads(agg.read_text())["sample_ranking_score"])
+            s = float(json.loads(agg.read_text())["sample_ranking_score"])
         except (OSError, KeyError, ValueError):
             return float("-inf")
+        return s if math.isfinite(s) else float("-inf")  # NaN would make max() order-dependent
 
     best = max(cifs, key=score)
     conf = best.with_name(best.name.replace("_model.cif", "_confidences.json"))
