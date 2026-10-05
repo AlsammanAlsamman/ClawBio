@@ -395,3 +395,9 @@ def test_het_balance_ignores_population_with_no_calls():
     """A NaN het (population with no valid calls) must not read as perfect balance."""
     assert compute_heterozygosity_balance({"AFR": 0.0, "EUR": float("nan")}) == 0.0
     assert compute_heterozygosity_balance({"EUR": float("nan")}) == 0.0
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("nan")])
+def test_heim_score_rejects_non_finite_weights(bad):
+    with pytest.raises(ValueError):
+        compute_heim_score({"AFR": 5, "EUR": 5}, {"AFR": 0.3, "EUR": 0.3}, 1, weights=(0, 0, 0, bad))

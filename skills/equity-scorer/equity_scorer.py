@@ -532,8 +532,8 @@ def compute_heim_score(
     gs = compute_geographic_spread(set(pop_counts.keys()))
 
     w1, w2, w3, w4 = weights
-    if any(w < 0 for w in weights):
-        raise ValueError("HEIM weights must be non-negative, got: %s" % (weights,))
+    if not all(np.isfinite(w) and w >= 0 for w in weights):
+        raise ValueError("HEIM weights must be finite and non-negative, got: %s" % (weights,))
     w_sum = w1 + w2 + w3 + w4
     if w_sum == 0:
         raise ValueError("HEIM weights must not all be zero")
