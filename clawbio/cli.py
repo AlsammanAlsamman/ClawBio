@@ -1606,7 +1606,7 @@ def run_skill(
             token = extra_args[i]
             flag = _key(token)
             if flag in blocked:
-                i += 2 if "=" not in token and i + 1 < len(extra_args) else i + 1
+                i += 2 if flag != "--demo" and "=" not in token and i + 1 < len(extra_args) else 1
                 continue
             if flag in allowed:
                 _name, sep, value = token.partition("=")
