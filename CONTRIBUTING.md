@@ -161,7 +161,7 @@ The most restrictive of the three fields governs any given use; see `LICENSE`.
 
 ## Code Standards
 
-- Python 3.10+
+- Python 3.11+
 - Type hints encouraged
 - pathlib for all file paths
 - No hardcoded absolute paths
