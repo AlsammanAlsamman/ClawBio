@@ -90,6 +90,10 @@ def moran_i(values: np.ndarray, knn_idx: np.ndarray) -> float:
     if not np.isfinite(x).all():
         raise ValueError("values must contain only finite values")
     graph = _graph(knn_idx, len(x))
+    # The mean of a constant is not always that constant in floating point, so
+    # centring cannot be relied on to give exact zeros.
+    if np.ptp(x) == 0.0:
+        return float("nan")
     z = x - x.mean()
     denominator = float(np.dot(z, z))
     if denominator == 0.0:

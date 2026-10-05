@@ -28,6 +28,19 @@ def test_moran_i_of_a_constant_gene_is_undefined():
     assert np.isnan(st.moran_i(np.array([4.0, 4.0]), indices))
 
 
+@pytest.mark.parametrize(
+    "values",
+    [np.full(3, 0.1), np.log1p(np.full(10, 1e4 / 3))],
+    ids=["three_tenths", "log_normalised_ten_spots"],
+)
+def test_moran_i_of_a_constant_gene_is_undefined_when_its_mean_is_inexact(values):
+    # (0.1 + 0.1 + 0.1) / 3 is 0.10000000000000002, so centring a constant can
+    # leave the same tiny residual at every spot instead of zeros.
+    n_spots = len(values)
+    ring = np.array([[(i + 1) % n_spots] for i in range(n_spots)], dtype=int)
+    assert np.isnan(st.moran_i(values, ring))
+
+
 def test_nhood_enrichment_marks_a_zero_variance_null_as_undefined():
     # Every permutation produces the same directed A->A count, so its null SD is 0.
     indices = np.array([[1], [0]], dtype=int)
