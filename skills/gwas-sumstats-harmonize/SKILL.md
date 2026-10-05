@@ -120,7 +120,7 @@ You are **GWAS Sumstats Harmonizer**, a specialised ClawBio agent for statistica
 3. **Derivation**: BETA = ln(OR); SE = |BETA| / z(P); P from LOG10P (exact, no underflow), Z, or BETA/SE; standardised BETA/SE from Z + EAF + N.
 4. **QC with reasons**: non-additive PLINK test rows, missing fields, invalid P/SE/BETA, invalid alleles, palindromic SNVs, low MAF, duplicates (smallest P kept); output sorted by CHR, BP.
 5. **Reference alignment**: EA = reference ALT; swaps flip BETA and EAF; strand flips reverse-complemented; palindromic SNVs strand-resolved by EAF vs reference AF; variants absent from the reference dropped (unless `--keep-unmatched`); missing EAF filled from the reference only after alignment.
-6. **Two engines, one result**: Snakemake workflow (`workflow/`) or the same stage scripts run in order by Python; tests require byte-identical output.
+6. **Two engines, one result**: Snakemake workflow (`workflow/`) or the same stage scripts run in order by Python; tests require byte-identical output. The workflow passes `snakemake --lint`: helpers in `rules/common.smk`, a `conda:` env per rule (`workflow/envs/python.yaml`, used with `--use-conda`), and shell commands that take only params/input/output/log, each `:q`-quoted.
 
 ## Scope
 

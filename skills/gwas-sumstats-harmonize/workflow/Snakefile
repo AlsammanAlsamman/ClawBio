@@ -19,7 +19,11 @@ from config_loader import load_config
 
 CFG = load_config(config.get("config_dir"))
 
-PYTHON = sys.executable  # same interpreter that runs Snakemake, never a bare `python`
+# With --use-conda (--sdm conda) every rule runs in envs/python.yaml, so use that
+# environment's python; otherwise the interpreter running Snakemake, never a
+# bare `python` picked up from PATH.
+_DEPLOY = getattr(getattr(workflow, "deployment_settings", None), "deployment_method", None) or ()
+PYTHON = "python" if any(str(m).lower().endswith("conda") for m in _DEPLOY) else sys.executable
 # The run directory (-d) is not the workflow directory, so scripts are
 # addressed absolutely rather than as scripts/<stage>.py.
 SCRIPTS = os.path.join(WORKFLOW_DIR, "scripts").replace("\\", "/")
@@ -27,14 +31,6 @@ OUT = CFG["analysis"]["output_dir"]
 TARGETS = CFG["analysis"]["targets"]
 DATASETS = CFG["data"]["datasets"]
 REFERENCE = CFG["analysis"]["resources"]["reference"]
-
-
-def _stage(name):
-    return CFG["analysis"][name]
-
-
-def _flag(value):
-    return str(value).lower() if isinstance(value, bool) else str(value)
 
 
 wildcard_constraints:
@@ -53,6 +49,7 @@ for _name, _entry in DATASETS.items():
             _fh.write(_text)
 
 
+include: "rules/common.smk"
 include: "rules/map_columns.smk"
 include: "rules/derive_effects.smk"
 include: "rules/qc_filter.smk"

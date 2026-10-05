@@ -9,13 +9,19 @@ rule align_reference:
         summary=f"{OUT}/align_reference/{{dataset}}.summary.json",
         done=touch(f"{OUT}/done/align_reference_{{dataset}}.done"),
     params:
-        reference_flag=f'--reference "{REFERENCE}"' if REFERENCE else "",
+        python=PYTHON,
+        script=f"{SCRIPTS}/align_reference.py",
         drop_unmatched=_flag(_stage("align_reference")["drop_unmatched"]),
+    conda:
+        "../envs/python.yaml"
     log:
         f"{OUT}/logs/align_reference/{{dataset}}.log",
     shell:
-        '"{PYTHON}" "{SCRIPTS}/align_reference.py" '
-        '--input "{input.data}" {params.reference_flag} '
-        '--out "{output.result}" --summary-json "{output.summary}" '
-        '--drop-unmatched "{params.drop_unmatched}" '
-        '> "{log}" 2>&1'
+        # Only params/input/output/log reach the shell (snakemake --lint), each :q-quoted.
+        # With no reference, input.reference formats to nothing (not ''), so the
+        # --reference=<value> form is needed: it gives "" and the script passes rows through.
+        '{params.python:q} {params.script:q} '
+        '--input {input.data:q} --reference={input.reference:q} '
+        '--out {output.result:q} --summary-json {output.summary:q} '
+        '--drop-unmatched {params.drop_unmatched:q} '
+        '> {log:q} 2>&1'

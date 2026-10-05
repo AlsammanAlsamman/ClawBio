@@ -59,7 +59,7 @@ def str2bool(value):
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--input", required=True, help="Filtered canonical TSV from qc_filter")
-    p.add_argument("--reference", help="Reference TSV (CHR BP REF ALT [AF]); omit to pass through")
+    p.add_argument("--reference", help="Reference TSV (CHR BP REF ALT [AF]); omit or pass \"\" to pass through")
     p.add_argument("--out", required=True, help="Aligned canonical TSV")
     p.add_argument("--summary-json", required=True, help="Per-run summary JSON")
     p.add_argument("--drop-unmatched", type=str2bool, required=True,
@@ -107,6 +107,7 @@ def align(row, candidates, counts):
 
 def main():
     args = parse_args()
+    args.reference = args.reference or None  # the Snakemake rule passes "" for "no reference"
     rows = read_table(args.input)
     logger.info("Read %d rows from %s", len(rows), args.input)
     counts = Counter()

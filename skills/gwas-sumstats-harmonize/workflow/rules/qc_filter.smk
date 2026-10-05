@@ -8,14 +8,19 @@ rule qc_filter:
         summary=f"{OUT}/qc_filter/{{dataset}}.summary.json",
         done=touch(f"{OUT}/done/qc_filter_{{dataset}}.done"),
     params:
+        python=PYTHON,
+        script=f"{SCRIPTS}/qc_filter.py",
         palindromic=_stage("qc_filter")["palindromic"],
         min_maf=_stage("qc_filter")["min_maf"],
         keep_indels=_flag(_stage("qc_filter")["keep_indels"]),
+    conda:
+        "../envs/python.yaml"
     log:
         f"{OUT}/logs/qc_filter/{{dataset}}.log",
     shell:
-        '"{PYTHON}" "{SCRIPTS}/qc_filter.py" '
-        '--input "{input.data}" --out "{output.result}" --summary-json "{output.summary}" '
-        '--palindromic "{params.palindromic}" --min-maf "{params.min_maf}" '
-        '--keep-indels "{params.keep_indels}" '
-        '> "{log}" 2>&1'
+        # Only params/input/output/log reach the shell (snakemake --lint), each :q-quoted.
+        '{params.python:q} {params.script:q} '
+        '--input {input.data:q} --out {output.result:q} --summary-json {output.summary:q} '
+        '--palindromic {params.palindromic:q} --min-maf {params.min_maf:q} '
+        '--keep-indels {params.keep_indels:q} '
+        '> {log:q} 2>&1'

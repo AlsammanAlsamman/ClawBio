@@ -686,6 +686,47 @@ class TestIndelAlignment:
         assert (rows["ins"]["EA"], rows["ins"]["NEA"]) == ("GTA", "G")
 
 
+# ── Workflow follows snakemake --lint (checked statically, no Snakemake needed) ──
+
+
+STAGE_NAMES = ["map_columns", "derive_effects", "qc_filter", "align_reference"]
+
+
+class TestWorkflowLintRules:
+    def test_no_functions_in_snakefile(self):
+        snakefile = (WORKFLOW / "Snakefile").read_text(encoding="utf-8")
+        assert not re.search(r"^def ", snakefile, re.M)
+        common = (WORKFLOW / "rules" / "common.smk").read_text(encoding="utf-8")
+        assert "def _stage" in common and "def _flag" in common
+        includes = re.findall(r'^include: "rules/(\w+)\.smk"', snakefile, re.M)
+        assert includes == ["common"] + STAGE_NAMES
+
+    @pytest.mark.parametrize("stage", STAGE_NAMES)
+    def test_rule_uses_conda_env_and_params_only(self, stage):
+        text = (WORKFLOW / "rules" / f"{stage}.smk").read_text(encoding="utf-8")
+        assert 'conda:\n        "../envs/python.yaml"' in text
+        shell = text.split("shell:", 1)[1]
+        assert "{PYTHON" not in shell and "{SCRIPTS" not in shell
+        assert "'{params.python:q} {params.script:q} '" in shell
+        # Every substituted field is shell-quoted by Snakemake, never wrapped in "..."
+        assert not re.search(r'"\{[^}]+\}"', shell), shell
+
+    def test_conda_env_file(self):
+        env = yaml.safe_load((WORKFLOW / "envs" / "python.yaml").read_text(encoding="utf-8"))
+        assert any(str(d).startswith("python") for d in env["dependencies"])
+
+    def test_align_reference_empty_reference_means_none(self, tmp_path):
+        """The rule always passes --reference; an empty value must mean 'no reference'."""
+        canon = tmp_path / "c.tsv"
+        canon.write_text("\t".join(CANONICAL) + "\n" + "\t".join(["x", "1", "1", "G", "A", "", "0.1", "0.02", "0.5", ""]) + "\n")
+        out = tmp_path / "o.tsv"
+        r = run_stage("align_reference", ["--input", str(canon), "--reference", "", "--out", str(out),
+                                          "--summary-json", str(tmp_path / "s.json"), "--drop-unmatched", "true"])
+        assert r.returncode == 0, r.stderr
+        assert out.read_text() == canon.read_text()
+        assert json.loads((tmp_path / "s.json").read_text())["reference"] is None
+
+
 # ── Output contract ───────────────────────────────────────────────────────────
 
 
@@ -731,6 +772,37 @@ class TestOutputContract:
 @pytest.mark.integration
 @pytest.mark.skipif(importlib.util.find_spec("snakemake") is None, reason="snakemake not installed")
 class TestSnakemakeEngine:
+    @pytest.mark.parametrize("with_reference", [True, False])
+    def test_snakemake_lint_passes(self, tmp_path, with_reference):
+        """`snakemake --lint` exits non-zero on any lint; the shipped workflow must be clean."""
+        out = tmp_path / "run"
+        if with_reference:
+            args = ["--demo"]
+        else:
+            args = ["--input", str(EXAMPLES / "cohort_ssf.tsv")]
+        r = run_cli(args + ["--output", str(out), "--engine", "python"])
+        assert r.returncode == 0, r.stderr
+        lint = subprocess.run(
+            [sys.executable, "-m", "snakemake", "--lint", "-s", str(WORKFLOW / "Snakefile"), "-d", str(out),
+             "--config", f"config_dir={(out / 'config').as_posix()}"],
+            capture_output=True, text=True,
+        )
+        assert lint.returncode == 0, lint.stdout + lint.stderr
+
+    def test_engines_match_without_reference(self, tmp_path):
+        """No reference: the rule passes an empty --reference, which must mean pass-through."""
+        outs = {}
+        for engine in ("python", "snakemake"):
+            out = tmp_path / engine
+            r = run_cli(["--input", str(EXAMPLES / "cohort_ssf.tsv"), "--output", str(out), "--engine", engine])
+            assert r.returncode == 0, r.stderr
+            outs[engine] = out
+        a = (outs["python"] / "harmonized" / "cohort_ssf.tsv").read_text()
+        b = (outs["snakemake"] / "harmonized" / "cohort_ssf.tsv").read_text()
+        assert a == b
+        summary = json.loads((outs["snakemake"] / "work" / "align_reference" / "cohort_ssf.summary.json").read_text())
+        assert summary["reference"] is None
+
     def test_snakemake_engine_matches_python_engine(self, demo_out, tmp_path):
         out = tmp_path / "sm"
         r = run_cli(["--demo", "--output", str(out), "--engine", "snakemake"])
