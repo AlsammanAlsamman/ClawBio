@@ -106,7 +106,7 @@ You are **Snakemake Bio Scaffold**, a specialised ClawBio agent for workflow eng
 
 1. **Config-by-concern**: `data.yaml` (what), `analysis.yaml` (how), `software.yaml` (where), read only by `config_loader.py`, which validates, resolves paths to absolute forward-slash form, and merges per-item overrides.
 2. **One stage = one rule + one script**, in Snakemake's recommended layout (workflow code under `workflow/`, `config/` beside it): `workflow/rules/<stage>.smk` only wires paths/params; `workflow/scripts/<stage>.py` is a standalone argparse CLI whose flags mirror `analysis.yaml`.
-3. **Safe DAG defaults**: `touch()` done-sentinels per rule instance, `wildcard_constraints` pinned to the closed set of item names, `{PYTHON:q}` = `sys.executable`, scripts addressed from `workflow.basedir`, per-rule logs.
+3. **Safe DAG defaults**: `touch()` done-sentinels per rule instance, `wildcard_constraints` pinned to the closed set of item names, `params.python` = `sys.executable` (the env's `python` under `--use-conda`), scripts addressed from `workflow.basedir`, a `conda:` env per rule, per-rule logs. Generated projects pass `snakemake --lint`.
 4. **Runs immediately**: stub scripts pass rows through and write a summary JSON, so `snakemake --cores 1` succeeds before any real logic is written.
 5. **Optional verification**: `--check` runs `snakemake -n` on the generated project and records the result.
 
@@ -128,7 +128,7 @@ Spec fields (defaults in brackets): `project`; `description`; `items.key` [`data
 1. **Validate (prescriptive)**: names are lower_snake_case, no Python keywords or Snakemake reserved words (`all`, `input`, `params`, ...), no duplicate stages, no null params, overrides only reference existing stages/params. Reject with a clear message; never guess a fix.
 2. **Render (prescriptive)**: emit the files listed under Output Structure. Stage *i* reads stage *i-1*'s output and its done-sentinel; stage 1 reads the item's `path`. `rule all` requests the last stage's sentinel for every target.
 3. **Write (prescriptive)**: refuse a non-empty project directory, or an `--output` that already holds `report.md`, `result.json` or `reproducibility/`, unless `--force`; `--force` overwrites scaffold files and the report only and never deletes other files. Spec text never goes into a string literal or docstring: free text (descriptions) becomes `#` comments, values reach Python through `repr()`, YAML through `yaml.safe_dump`, and the shell through Snakemake's `{...:q}` quoting.
-4. **Check (optional)**: with `--check`, run `snakemake -n --cores 1` in the project and record pass/fail.
+4. **Check (optional)**: with `--check`, run `snakemake -n --cores 1` in the project and record pass/fail. The tests also hold every generated project to `snakemake --lint` (exit 0).
 5. **Report (flexible)**: write `report.md` + `result.json` + reproducibility bundle; explain next steps to the user in plain language.
 
 ## CLI Reference
@@ -162,8 +162,8 @@ Expected output: a `demo_sumstats_qc/` project with three stages (`format_sumsta
 
 An agent can apply this layout by hand without the script:
 
-1. **workflow/Snakefile**: `config/` imported from `os.path.dirname(workflow.basedir)`; `CFG = load_config()` once; `PYTHON = sys.executable`; `SCRIPTS = os.path.join(workflow.basedir, "scripts")`; `OUT = CFG["analysis"]["output_dir"]`; `wildcard_constraints: <wc>="|".join(re.escape(n) for n in ITEMS)`; `include:` each `rules/<stage>.smk`; `rule all` = last stage's sentinel for each target.
-2. **Rule**: named `input:`/`output:` built from `f"{OUT}/<stage>/{{<wc>}}.<ext>"`, plus `done=touch(f"{OUT}/done/<stage>_{{<wc>}}.done")`; params are lambdas reading the merged per-item settings; `shell:` is one templated command `{PYTHON:q} {SCRIPTS:q}/<stage>.py` with every field `:q`-quoted, redirected to `log:`.
+1. **workflow/Snakefile**: `config/` imported from `os.path.dirname(workflow.basedir)`; `CFG = load_config()` once; `PYTHON = sys.executable` (or `python` when conda deployment is on); `SCRIPTS = os.path.join(workflow.basedir, "scripts")`; helper functions in `rules/common.smk`, never in the Snakefile; `OUT = CFG["analysis"]["output_dir"]`; `wildcard_constraints: <wc>="|".join(re.escape(n) for n in ITEMS)`; `include:` `rules/common.smk`, then each `rules/<stage>.smk`; `rule all` = last stage's sentinel for each target.
+2. **Rule**: named `input:`/`output:` built from `f"{OUT}/<stage>/{{<wc>}}.<ext>"`, plus `done=touch(f"{OUT}/done/<stage>_{{<wc>}}.done")`; `params:` carry `python` and `script` plus lambdas reading the merged per-item settings; `conda: "../envs/python.yaml"`; `shell:` is one templated command `{params.python:q} {params.script:q}` using only params/input/output/log, every field `:q`-quoted, redirected to `log:`.
 3. **Script**: a `--help` with the stage description and a copy-pasteable example; argparse `--kebab-case` flags matching `analysis.yaml` keys; `logging` with "N in, M dropped, K kept"; shared helpers in `workflow/scripts/lib/` via a `sys.path.insert` shim; never `import snakemake`.
 4. **Config loader**: one `ConfigError`; `_resolve()` to absolute forward-slash paths; per-item `overrides` merged over stage defaults, unknown keys rejected (catches typos).
 
@@ -202,11 +202,15 @@ rule filter_maf:
         summary=f"{OUT}/filter_maf/{{dataset}}.summary.json",
         done=touch(f"{OUT}/done/filter_maf_{{dataset}}.done"),
     params:
+        python=PYTHON,
+        script=f"{SCRIPTS}/filter_maf.py",
         maf=lambda wc: _item_analysis(wc.dataset, "filter_maf")["maf"],
+    conda:
+        "../envs/python.yaml"
     log:
         f"{OUT}/logs/filter_maf/{{dataset}}.log",
     shell:
-        '{PYTHON:q} {SCRIPTS:q}/filter_maf.py '
+        '{params.python:q} {params.script:q} '
         '--input {input.data:q} --out {output.result:q} --summary-json {output.summary:q} '
         '--maf {params.maf:q} '
         '> {log:q} 2>&1'
@@ -218,7 +222,7 @@ rule filter_maf:
 output_directory/
 ├── report.md              # Stage table, file inventory, next steps
 ├── result.json            # Machine-readable project description
-├── <project>/             # Generated project (workflow/{Snakefile,rules,scripts}, config/, ...)
+├── <project>/             # Generated project (workflow/{Snakefile,rules,scripts,envs}, config/, ...)
 └── reproducibility/
     ├── commands.sh         # Exact command to regenerate the scaffold
     ├── environment.yml     # Conda/pip environment snapshot
@@ -240,7 +244,7 @@ output_directory/
 - **Editing a script does not rerun its rule.** You will want to tell the user "just rerun snakemake" after they change `workflow/scripts/<stage>.py`. Do not. Snakemake tracks the rule's text, not the content of the script it calls; tell them `snakemake --cores N -R <stage>`.
 - **A done-sentinel can outlive its output.** You will want to delete only `results/<stage>/...` to force a recompute. Do not. The `results/done/<stage>_<item>.done` file keeps the DAG believing the stage is finished; delete both, or use `-R`.
 - **Shared inputs cascade.** You will want to put a sample list or region file that every job reads into `input:`. Think first: touching it invalidates every completed job that declares it, including expensive ones. When adding one new item, build only its targets (`snakemake results/done/<last>_<item>.done`), not bare `snakemake`.
-- **Never call bare `python` in `shell:`.** It can resolve to a different environment than the one running Snakemake. The scaffold's `{PYTHON:q}` (`sys.executable`) exists for this reason; keep it when editing rules.
+- **Never call bare `python` in `shell:`.** It can resolve to a different environment than the one running Snakemake. The scaffold's `params.python` (`sys.executable`, or the conda env's `python` under `--use-conda`) exists for this reason; keep it when editing rules.
 - **Spec text is untrusted input to generated code.** You will want to drop a description or a setting into a docstring or `"..."` literal in a template. Do not: `"""`, a trailing backslash or a quote ends the literal and the rest of the text runs as code, including on `snakemake -n` and `--help`. Put free text in `#` comments and values through `repr()` / `yaml.safe_dump`; the hostile-spec tests tokenize every generated file to enforce this.
 - **Quote shell fields with `:q`, not `"..."`.** You will want to write `--x "{params.x}"`. Do not: `$(...)` and backticks still expand inside double quotes. Use `{params.x:q}`, `{input.data:q}`, `{log:q}`.
 - **Windows paths.** Backslash paths mixed with forward-slash rule patterns can make Snakemake miss the producing rule (spurious `MissingInputException`), so the loader normalises to `/`. Relative CLI targets can also raise `MissingRuleException`; use absolute targets. Deep project paths can overflow MAX_PATH in `.snakemake/metadata`; keep projects short-pathed or use `--drop-metadata`.

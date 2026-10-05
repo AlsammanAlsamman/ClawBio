@@ -134,7 +134,7 @@ class TestProjectLayout:
         assert 'os.path.dirname(workflow.basedir), "config"' in snakefile
 
     def test_one_rule_and_one_script_per_stage(self, demo_project):
-        rules = sorted(p.stem for p in (demo_project / "workflow" / "rules").glob("*.smk"))
+        rules = sorted(p.stem for p in (demo_project / "workflow" / "rules").glob("*.smk") if p.stem != "common")
         scripts = sorted(p.stem for p in (demo_project / "workflow" / "scripts").glob("*.py"))
         assert rules == sorted(DEMO_STAGES)
         assert scripts == sorted(DEMO_STAGES)
@@ -171,16 +171,43 @@ class TestProjectLayout:
 class TestConventions:
     def test_every_rule_touches_a_done_sentinel(self, demo_project):
         for smk in (demo_project / "workflow" / "rules").glob("*.smk"):
+            if smk.stem == "common":
+                continue
             text = smk.read_text()
             assert re.search(r'done=touch\(f"\{OUT\}/done/' + smk.stem + r"_", text), smk.name
 
     def test_rules_use_sys_executable_not_bare_python(self, demo_project):
         snakefile = (demo_project / "workflow" / "Snakefile").read_text()
-        assert "PYTHON = sys.executable" in snakefile
-        for smk in (demo_project / "workflow" / "rules").glob("*.smk"):
-            text = smk.read_text()
-            assert "'{PYTHON:q} {SCRIPTS:q}/" in text
+        assert "else sys.executable" in snakefile
+        for stage in DEMO_STAGES:
+            text = (demo_project / "workflow" / "rules" / f"{stage}.smk").read_text()
+            assert "python=PYTHON," in text
+            assert f'script=f"{{SCRIPTS}}/{stage}.py",' in text
+            assert "'{params.python:q} {params.script:q} '" in text
             assert "'python " not in text and '"python ' not in text
+
+    def test_shell_uses_no_globals(self, demo_project):
+        """snakemake --lint: values reach shell: through params, not module-level variables."""
+        for stage in DEMO_STAGES:
+            text = (demo_project / "workflow" / "rules" / f"{stage}.smk").read_text()
+            shell = text.split("shell:", 1)[1]
+            assert "{PYTHON" not in shell and "{SCRIPTS" not in shell
+
+    def test_every_rule_declares_a_conda_env(self, demo_project):
+        env = yaml.safe_load((demo_project / "workflow" / "envs" / "python.yaml").read_text())
+        assert any(str(d).startswith("python") for d in env["dependencies"])
+        for stage in DEMO_STAGES:
+            text = (demo_project / "workflow" / "rules" / f"{stage}.smk").read_text()
+            assert 'conda:\n        "../envs/python.yaml"' in text
+
+    def test_functions_live_in_common_smk(self, demo_project):
+        """snakemake --lint: no functions mixed with rules in the Snakefile."""
+        snakefile = (demo_project / "workflow" / "Snakefile").read_text()
+        assert not re.search(r"^def ", snakefile, re.M)
+        common = (demo_project / "workflow" / "rules" / "common.smk").read_text()
+        assert "def _item_path" in common and "def _item_analysis" in common
+        includes = re.findall(r'^include: "rules/(\w+)\.smk"', snakefile, re.M)
+        assert includes[0] == "common" and includes[1:] == DEMO_STAGES
 
     def test_downstream_stage_depends_on_upstream_sentinel(self, demo_project):
         text = (demo_project / "workflow" / "rules" / "filter_maf.smk").read_text()
@@ -321,6 +348,9 @@ class TestSpecValidation:
             ([{"name": "all"}], "reserved"),
             ([{"name": "a", "params": {"x": None}}], "null"),
             ([{"name": "a", "params": {"bad-key": 1}}], "bad-key"),
+            ([{"name": "a", "params": {"python": "x"}}], "clashes"),
+            ([{"name": "a", "params": {"script": "x"}}], "clashes"),
+            ([{"name": "common"}], "reserved"),
         ],
     )
     def test_invalid_specs_rejected(self, tmp_path, stages, message):
@@ -374,7 +404,7 @@ class TestSpecValidation:
             ["--name", "quick", "--stages", "align,count,report", "--output", str(tmp_path)]
         )
         assert result.returncode == 0, result.stderr
-        rules = sorted(p.stem for p in (tmp_path / "quick" / "workflow" / "rules").glob("*.smk"))
+        rules = sorted(p.stem for p in (tmp_path / "quick" / "workflow" / "rules").glob("*.smk") if p.stem != "common")
         assert rules == ["align", "count", "report"]
 
     def test_no_input_and_no_demo_errors(self, tmp_path):
@@ -596,6 +626,23 @@ def _snakemake_available() -> bool:
 @pytest.mark.integration
 @pytest.mark.skipif(not _snakemake_available(), reason="snakemake not installed")
 class TestSnakemakeIntegration:
+    @pytest.mark.parametrize("which", ["demo", "quick", "hostile"])
+    def test_snakemake_lint_passes(self, demo_project, tmp_path, which):
+        """`snakemake --lint` exits non-zero on any lint; generated projects must be clean."""
+        if which == "demo":
+            proj = demo_project
+        elif which == "quick":
+            r = run_cli(["--name", "quick", "--stages", "align,count", "--output", str(tmp_path)])
+            assert r.returncode == 0, r.stderr
+            proj = tmp_path / "quick"
+            (proj / "input" / "example.tsv").write_text("SNP\tP\nrs1\t0.5\n")
+        else:
+            proj = _scaffold(tmp_path, _hostile_spec(path="input/a.tsv"))
+            (proj / "input" / "a.tsv").write_text("SNP\tP\nrs1\t0.5\n")
+        result = subprocess.run([sys.executable, "-m", "snakemake", "--lint"],
+                                cwd=proj, capture_output=True, text=True)
+        assert result.returncode == 0, result.stdout + result.stderr
+
     def test_dry_run(self, demo_project):
         result = subprocess.run(
             [sys.executable, "-m", "snakemake", "-n", "--cores", "1"],
