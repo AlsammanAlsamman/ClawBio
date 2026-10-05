@@ -401,3 +401,21 @@ def test_het_balance_ignores_population_with_no_calls():
 def test_heim_score_rejects_non_finite_weights(bad):
     with pytest.raises(ValueError):
         compute_heim_score({"AFR": 5, "EUR": 5}, {"AFR": 0.3, "EUR": 0.3}, 1, weights=(0, 0, 0, bad))
+
+
+def test_fst_coverage_excludes_undefined_pairs(tmp_path):
+    """A pair whose FST is NaN (no data in one population) was not computed."""
+    from equity_scorer import run_vcf_pipeline
+
+    vcf = tmp_path / "in.vcf"
+    rows = "".join(f"22\t{p}\trs{p}\tT\tA\t.\tPASS\t.\tGT\t0/0\t1/1\t./.\t./.\n" for p in (100, 200, 300))
+    vcf.write_text(
+        "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA1\tA2\tB1\tB2\n" + rows
+    )
+    pop_map = tmp_path / "map.csv"
+    pop_map.write_text(
+        "sample_id,population,superpopulation,country\n"
+        "A1,AFR,African,Kenya\nA2,AFR,African,Kenya\nB1,EUR,European,UK\nB2,EUR,European,UK\n"
+    )
+    result = run_vcf_pipeline(vcf, pop_map, tmp_path / "out", (0, 0, 1, 0))
+    assert result["components"]["fst_coverage"] == 0.0

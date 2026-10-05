@@ -1046,7 +1046,8 @@ def run_vcf_pipeline(
 
     # HEIM score
     print("Computing HEIM Equity Score...")
-    heim_result = compute_heim_score(pop_counts, obs_het, len(fst_dict), weights)
+    n_fst_defined = sum(not np.isnan(v) for v in fst_dict.values())
+    heim_result = compute_heim_score(pop_counts, obs_het, n_fst_defined, weights)
     heim_result["het_source"] = "computed"
     heim_result["fst_estimator"] = "Nei_GST"
     print("  Score: %s/100 (%s)" % (heim_result["heim_score"], heim_result["rating"]))
