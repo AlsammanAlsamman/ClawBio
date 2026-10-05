@@ -478,10 +478,11 @@ def compute_representation_index(pop_counts: Dict[str, int]) -> dict:
 
 def compute_heterozygosity_balance(het_values: Dict[str, float]) -> float:
     """Ratio of mean observed heterozygosity to theoretical max (0-1)."""
-    if not het_values:
+    # A population with no valid calls has NaN het; min(1.0, nan) is 1.0.
+    vals = [v for v in het_values.values() if not np.isnan(v)]
+    if not vals:
         return 0.0
-    mean_het = np.mean(list(het_values.values()))
-    return float(min(1.0, mean_het / 0.5))
+    return float(min(1.0, np.mean(vals) / 0.5))
 
 
 def compute_fst_coverage(n_populations: int, n_pairwise_computed: int) -> float:

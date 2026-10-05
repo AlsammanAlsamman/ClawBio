@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -386,3 +387,11 @@ def test_end_to_end_demo_vcf():
     assert result["heim_score"] > 0
     assert result["n_samples"] == 50
     assert result["n_populations"] == len(pop_indices)
+
+
+# ── HEIM inflation regressions ────────────────────────────────────────────────
+
+def test_het_balance_ignores_population_with_no_calls():
+    """A NaN het (population with no valid calls) must not read as perfect balance."""
+    assert compute_heterozygosity_balance({"AFR": 0.0, "EUR": float("nan")}) == 0.0
+    assert compute_heterozygosity_balance({"EUR": float("nan")}) == 0.0
