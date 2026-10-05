@@ -101,7 +101,7 @@ def run_struct_prediction(
             name = DEMO_NAME if demo else Path(input_path).stem
             query = write_openfold3_query(prepared["sequences"], name, work_dir / "openfold3_input")
             print("  Running OpenFold3 prediction...")
-            predict_result = run_openfold3(query, output_dir)
+            predict_result = run_openfold3(query, output_dir, name)
         else:
             print("  Running Boltz-2 prediction...")
             predict_result = run_boltz(

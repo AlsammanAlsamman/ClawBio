@@ -97,7 +97,7 @@ def _find_cif(boltz_output_dir: Path) -> dict:
     }
 
 
-def run_openfold3(query_json_path: Path, output_dir: Path) -> dict:
+def run_openfold3(query_json_path: Path, output_dir: Path, name: str) -> dict:
     """Run `run_openfold predict` and return paths to the best-ranked sample.
 
     Fully offline: no MSA server, no templates. Needs a CUDA GPU.
@@ -126,7 +126,7 @@ def run_openfold3(query_json_path: Path, output_dir: Path) -> dict:
     if proc.returncode != 0:
         raise RuntimeError(f"OpenFold3 exited with code {proc.returncode}.")
 
-    return _find_openfold3_output(output_dir)
+    return _find_openfold3_output(output_dir, name)
 
 
 def _build_openfold3_cmd(query_json_path: Path, output_dir: Path) -> list[str]:
@@ -140,20 +140,21 @@ def _build_openfold3_cmd(query_json_path: Path, output_dir: Path) -> list[str]:
     ]
 
 
-def _find_openfold3_output(output_dir: Path) -> dict:
+def _find_openfold3_output(output_dir: Path, name: str) -> dict:
     """Locate the best-ranked sample written by OpenFold3.
 
     OpenFold3 writes, per sample:
         <out>/<name>/seed_<n>/<name>_seed_<n>_sample_<k>_model.cif
         <out>/<name>/seed_<n>/<name>_seed_<n>_sample_<k>_confidences.json
         <out>/<name>/seed_<n>/<name>_seed_<n>_sample_<k>_confidences_aggregated.json
-    The sample with the highest ``sample_ranking_score`` is returned.
+    The sample with the highest ``sample_ranking_score`` is returned. Only
+    ``<out>/<name>/`` is searched, so other queries in a reused directory never win.
     """
     output_dir = Path(output_dir)
-    cifs = list(output_dir.rglob("*_model.cif"))
+    cifs = list((output_dir / name).rglob("*_model.cif"))
     if not cifs:
         raise FileNotFoundError(
-            f"No CIF file found under {output_dir}. "
+            f"No CIF file found under {output_dir / name}. "
             "OpenFold3 may not have produced output — check the logs above."
         )
 

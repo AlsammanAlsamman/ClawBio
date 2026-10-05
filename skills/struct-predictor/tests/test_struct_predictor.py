@@ -687,6 +687,22 @@ class TestWriteOpenFold3Query:
         assert chains[0] == {"molecule_type": "ligand", "chain_ids": ["L"], "smiles": "CCO"}
         assert chains[1] == {"molecule_type": "ligand", "chain_ids": ["M"], "ccd_codes": ["ATP"]}
 
+    def test_keeps_user_chain_ids(self, tmp_path):
+        """YAML ids H/L must reach OpenFold3 as H/L, as they do under Boltz."""
+        yaml_in = tmp_path / "ab.yaml"
+        yaml_in.write_text(
+            "sequences:\n"
+            "  - protein: {id: H, sequence: ACDEFGHIK}\n"
+            "  - protein: {id: L, sequence: LMNPQRSTV}\n")
+        prepared = validate_and_prepare(yaml_in, tmp_path / "work")
+        chains = json.loads(write_openfold3_query(prepared["sequences"], "ab", tmp_path).read_text())["queries"]["ab"]["chains"]
+        assert [c["chain_ids"] for c in chains] == [["H"], ["L"]]
+
+    def test_ligand_without_smiles_or_ccd_raises_clear_error(self, tmp_path):
+        seqs = _seqs({"name": "L", "sequence": "CCO", "entity_type": "ligand", "chain_id": "A"})
+        with pytest.raises(ValueError, match="Ligand 'L'.*smiles.*ccd"):
+            write_openfold3_query(seqs, "P", tmp_path)
+
 
 class TestBuildOpenFold3Cmd:
     def test_basic_structure(self, tmp_path):
@@ -717,13 +733,20 @@ def _fake_of3_output(out_dir: Path, name="Trpcage", scores=(0.1, 0.9, 0.5)) -> N
 class TestFindOpenFold3Output:
     def test_picks_highest_ranking_sample(self, tmp_path):
         _fake_of3_output(tmp_path)
-        r = _find_openfold3_output(tmp_path)
+        r = _find_openfold3_output(tmp_path, "Trpcage")
         assert r["cif_path"].name == "Trpcage_seed_42_sample_2_model.cif"
         assert r["confidence_json_path"].name == "Trpcage_seed_42_sample_2_confidences.json"
 
+    def test_ignores_other_queries_in_reused_output_dir(self, tmp_path):
+        _fake_of3_output(tmp_path, name="Older", scores=(0.99,))
+        _fake_of3_output(tmp_path)
+        r = _find_openfold3_output(tmp_path, "Trpcage")
+        assert r["cif_path"].name == "Trpcage_seed_42_sample_2_model.cif"
+
     def test_raises_if_not_found(self, tmp_path):
+        _fake_of3_output(tmp_path, name="Older")
         with pytest.raises(FileNotFoundError, match="No CIF file found"):
-            _find_openfold3_output(tmp_path)
+            _find_openfold3_output(tmp_path, "Trpcage")
 
 
 class TestRunOpenFold3:
@@ -731,19 +754,19 @@ class TestRunOpenFold3:
         _fake_of3_output(tmp_path / "out")
         proc = MagicMock(returncode=0)
         with patch("struct_predictor_core.predict.subprocess.run", return_value=proc):
-            r = run_openfold3(tmp_path / "q.json", tmp_path / "out")
+            r = run_openfold3(tmp_path / "q.json", tmp_path / "out", "Trpcage")
         assert r["cif_path"].name.endswith("sample_2_model.cif")
 
     def test_nonzero_exit_raises(self, tmp_path):
         proc = MagicMock(returncode=1)
         with patch("struct_predictor_core.predict.subprocess.run", return_value=proc):
             with pytest.raises(RuntimeError, match="OpenFold3 exited with code 1"):
-                run_openfold3(tmp_path / "q.json", tmp_path / "out")
+                run_openfold3(tmp_path / "q.json", tmp_path / "out", "Trpcage")
 
     def test_missing_binary_gives_install_hint(self, tmp_path):
         with patch("struct_predictor_core.predict.subprocess.run", side_effect=FileNotFoundError):
             with pytest.raises(RuntimeError, match="pip install openfold3"):
-                run_openfold3(tmp_path / "q.json", tmp_path / "out")
+                run_openfold3(tmp_path / "q.json", tmp_path / "out", "Trpcage")
 
 
 class TestOpenFold3Pipeline:

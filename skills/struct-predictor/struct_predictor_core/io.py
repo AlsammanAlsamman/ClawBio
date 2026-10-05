@@ -76,13 +76,17 @@ def write_openfold3_query(sequences: list[dict], name: str, work_dir: Path) -> P
     chains = []
     for seq in sequences:
         kind = seq.get("entity_type", "protein")
-        chain: dict = {"molecule_type": kind, "chain_ids": [seq["chain_id"]]}
+        # The user's YAML id, as Boltz sees it; chain_id is only a positional letter.
+        chain: dict = {"molecule_type": kind, "chain_ids": [str(seq["name"])]}
         if kind != "ligand":
             chain["sequence"] = seq["sequence"]
         elif seq.get("smiles"):
             chain["smiles"] = seq["smiles"]
-        else:
+        elif seq.get("ccd"):
             chain["ccd_codes"] = [seq["ccd"]]
+        else:
+            raise ValueError(
+                f"Ligand '{seq['name']}' needs a 'smiles' or 'ccd' key for OpenFold3.")
         chains.append(chain)
 
     work_dir = Path(work_dir)
