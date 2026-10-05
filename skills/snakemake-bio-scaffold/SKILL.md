@@ -105,8 +105,8 @@ You are **Snakemake Bio Scaffold**, a specialised ClawBio agent for workflow eng
 ## Core Capabilities
 
 1. **Config-by-concern**: `data.yaml` (what), `analysis.yaml` (how), `software.yaml` (where), read only by `config_loader.py`, which validates, resolves paths to absolute forward-slash form, and merges per-item overrides.
-2. **One stage = one rule + one script**: `rules/<stage>.smk` only wires paths/params; `scripts/<stage>.py` is a standalone argparse CLI whose flags mirror `analysis.yaml`.
-3. **Safe DAG defaults**: `touch()` done-sentinels per rule instance, `wildcard_constraints` pinned to the closed set of item names, `"{PYTHON}"` = `sys.executable`, per-rule logs.
+2. **One stage = one rule + one script**, in Snakemake's recommended layout (workflow code under `workflow/`, `config/` beside it): `workflow/rules/<stage>.smk` only wires paths/params; `workflow/scripts/<stage>.py` is a standalone argparse CLI whose flags mirror `analysis.yaml`.
+3. **Safe DAG defaults**: `touch()` done-sentinels per rule instance, `wildcard_constraints` pinned to the closed set of item names, `{PYTHON:q}` = `sys.executable`, scripts addressed from `workflow.basedir`, per-rule logs.
 4. **Runs immediately**: stub scripts pass rows through and write a summary JSON, so `snakemake --cores 1` succeeds before any real logic is written.
 5. **Optional verification**: `--check` runs `snakemake -n` on the generated project and records the result.
 
@@ -156,15 +156,15 @@ python clawbio.py run snakemake-scaffold --demo
 python clawbio.py run snakemake-scaffold --demo
 ```
 
-Expected output: a `demo_sumstats_qc/` project with three stages (`format_sumstats -> filter_maf -> filter_pvalue`) over two synthetic cohorts (200 variants each; `cohort_b` overrides `maf` to 0.05). `cd demo_sumstats_qc && snakemake --cores 1` completes all 6 jobs plus `all`.
+Expected output: a `demo_sumstats_qc/` project with three stages (`format_sumstats -> filter_maf -> filter_pvalue`) over two synthetic cohorts (200 variants each; `cohort_b` overrides `maf` to 0.05). `cd demo_sumstats_qc && snakemake --cores 1` (Snakemake finds `workflow/Snakefile` itself) completes all 6 jobs plus `all`.
 
 ## Algorithm / Methodology
 
 An agent can apply this layout by hand without the script:
 
-1. **Snakefile**: `CFG = load_config()` once; `PYTHON = sys.executable`; `OUT = CFG["analysis"]["output_dir"]`; `wildcard_constraints: <wc>="|".join(re.escape(n) for n in ITEMS)`; `include:` each `rules/<stage>.smk`; `rule all` = last stage's sentinel for each target.
-2. **Rule**: named `input:`/`output:` built from `f"{OUT}/<stage>/{{<wc>}}.<ext>"`, plus `done=touch(f"{OUT}/done/<stage>_{{<wc>}}.done")`; params are lambdas reading the merged per-item settings; `shell:` is one templated command calling `"{PYTHON}" scripts/<stage>.py`, redirected to `log:`.
-3. **Script**: docstring with a copy-pasteable example; argparse `--kebab-case` flags matching `analysis.yaml` keys; `logging` with "N in, M dropped, K kept"; shared helpers in `scripts/lib/` via a `sys.path.insert` shim; never `import snakemake`.
+1. **workflow/Snakefile**: `config/` imported from `os.path.dirname(workflow.basedir)`; `CFG = load_config()` once; `PYTHON = sys.executable`; `SCRIPTS = os.path.join(workflow.basedir, "scripts")`; `OUT = CFG["analysis"]["output_dir"]`; `wildcard_constraints: <wc>="|".join(re.escape(n) for n in ITEMS)`; `include:` each `rules/<stage>.smk`; `rule all` = last stage's sentinel for each target.
+2. **Rule**: named `input:`/`output:` built from `f"{OUT}/<stage>/{{<wc>}}.<ext>"`, plus `done=touch(f"{OUT}/done/<stage>_{{<wc>}}.done")`; params are lambdas reading the merged per-item settings; `shell:` is one templated command `{PYTHON:q} {SCRIPTS:q}/<stage>.py` with every field `:q`-quoted, redirected to `log:`.
+3. **Script**: a `--help` with the stage description and a copy-pasteable example; argparse `--kebab-case` flags matching `analysis.yaml` keys; `logging` with "N in, M dropped, K kept"; shared helpers in `workflow/scripts/lib/` via a `sys.path.insert` shim; never `import snakemake`.
 4. **Config loader**: one `ConfigError`; `_resolve()` to absolute forward-slash paths; per-item `overrides` merged over stage defaults, unknown keys rejected (catches typos).
 
 ## Example Queries
@@ -188,11 +188,12 @@ An agent can apply this layout by hand without the script:
 | 3 | `filter_pvalue` | `results/filter_pvalue/{dataset}.tsv` | `p_threshold=5e-08` |
 ```
 
-Generated rule (`rules/filter_maf.smk`):
+Generated rule (`workflow/rules/filter_maf.smk`):
 
 ```python
+# Stage 2: Drop variants below the minor-allele-frequency threshold.
 rule filter_maf:
-    """Stage 2: Drop variants below the minor-allele-frequency threshold."""
+    """Stage 2: filter_maf (description in the comments above)."""
     input:
         data=f"{OUT}/format_sumstats/{{dataset}}.tsv",
         done=f"{OUT}/done/format_sumstats_{{dataset}}.done",
@@ -205,10 +206,10 @@ rule filter_maf:
     log:
         f"{OUT}/logs/filter_maf/{{dataset}}.log",
     shell:
-        '"{PYTHON}" scripts/filter_maf.py '
-        '--input "{input.data}" --out "{output.result}" --summary-json "{output.summary}" '
-        '--maf "{params.maf}" '
-        '> "{log}" 2>&1'
+        '{PYTHON:q} {SCRIPTS:q}/filter_maf.py '
+        '--input {input.data:q} --out {output.result:q} --summary-json {output.summary:q} '
+        '--maf {params.maf:q} '
+        '> {log:q} 2>&1'
 ```
 
 ## Output Structure
@@ -217,7 +218,7 @@ rule filter_maf:
 output_directory/
 ├── report.md              # Stage table, file inventory, next steps
 ├── result.json            # Machine-readable project description
-├── <project>/             # Generated project (Snakefile, config/, rules/, scripts/, ...)
+├── <project>/             # Generated project (workflow/{Snakefile,rules,scripts}, config/, ...)
 └── reproducibility/
     ├── commands.sh         # Exact command to regenerate the scaffold
     ├── environment.yml     # Conda/pip environment snapshot
@@ -236,7 +237,7 @@ output_directory/
 
 ## Gotchas
 
-- **Editing a script does not rerun its rule.** You will want to tell the user "just rerun snakemake" after they change `scripts/<stage>.py`. Do not. Snakemake tracks the rule's text, not the content of the script it calls; tell them `snakemake --cores N -R <stage>`.
+- **Editing a script does not rerun its rule.** You will want to tell the user "just rerun snakemake" after they change `workflow/scripts/<stage>.py`. Do not. Snakemake tracks the rule's text, not the content of the script it calls; tell them `snakemake --cores N -R <stage>`.
 - **A done-sentinel can outlive its output.** You will want to delete only `results/<stage>/...` to force a recompute. Do not. The `results/done/<stage>_<item>.done` file keeps the DAG believing the stage is finished; delete both, or use `-R`.
 - **Shared inputs cascade.** You will want to put a sample list or region file that every job reads into `input:`. Think first: touching it invalidates every completed job that declares it, including expensive ones. When adding one new item, build only its targets (`snakemake results/done/<last>_<item>.done`), not bare `snakemake`.
 - **Never call bare `python` in `shell:`.** It can resolve to a different environment than the one running Snakemake. The scaffold's `{PYTHON:q}` (`sys.executable`) exists for this reason; keep it when editing rules.

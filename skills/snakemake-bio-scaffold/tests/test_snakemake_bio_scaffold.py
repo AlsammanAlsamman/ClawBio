@@ -1,8 +1,8 @@
 """Tests for snakemake-bio-scaffold.
 
 The skill generates a Snakemake project in the config-by-concern layout
-(data/analysis/software.yaml + config_loader.py, one rules/<stage>.smk and one
-standalone scripts/<stage>.py per stage, results/done/ sentinels). These tests
+(data/analysis/software.yaml + config_loader.py, one workflow/rules/<stage>.smk and
+one standalone workflow/scripts/<stage>.py per stage, results/done/ sentinels). These tests
 check the generator's own contract and that the *generated* project is
 internally consistent and runnable.
 """
@@ -84,7 +84,7 @@ class TestDemoRun:
         assert [s["name"] for s in data["stages"]] == DEMO_STAGES
         assert data["targets"] == ["cohort_a", "cohort_b"]
         assert data["rule_count"] == len(DEMO_STAGES)
-        assert "Snakefile" in data["files"]
+        assert "workflow/Snakefile" in data["files"]
 
     def test_reproducibility_bundle(self, demo_out):
         repro = demo_out / "reproducibility"
@@ -106,22 +106,36 @@ class TestDemoRun:
 class TestProjectLayout:
     def test_top_level_layout(self, demo_project):
         for rel in (
-            "Snakefile",
+            "workflow/Snakefile",
             "README.md",
             ".gitignore",
             "config/data.yaml",
             "config/analysis.yaml",
             "config/software.yaml",
             "config/config_loader.py",
-            "scripts/lib/pipeline_io.py",
+            "workflow/scripts/lib/pipeline_io.py",
             "utilities/README.md",
             "resources/README.md",
         ):
             assert (demo_project / rel).exists(), rel
 
+    def test_standard_snakemake_layout(self, demo_project):
+        """Snakemake's recommended layout: workflow code under workflow/, config/ beside it."""
+        for rel in ("Snakefile", "rules", "scripts"):
+            assert not (demo_project / rel).exists(), f"{rel} belongs under workflow/"
+        assert (demo_project / "workflow" / "Snakefile").is_file()
+        assert (demo_project / "config" / "config_loader.py").is_file()
+        assert (demo_project / "resources").is_dir()
+
+    def test_scripts_addressed_from_workflow_basedir(self, demo_project):
+        """Script paths come from workflow.basedir, so `snakemake -d <elsewhere>` still finds them."""
+        snakefile = (demo_project / "workflow" / "Snakefile").read_text()
+        assert 'SCRIPTS = os.path.join(workflow.basedir, "scripts")' in snakefile
+        assert 'os.path.dirname(workflow.basedir), "config"' in snakefile
+
     def test_one_rule_and_one_script_per_stage(self, demo_project):
-        rules = sorted(p.stem for p in (demo_project / "rules").glob("*.smk"))
-        scripts = sorted(p.stem for p in (demo_project / "scripts").glob("*.py"))
+        rules = sorted(p.stem for p in (demo_project / "workflow" / "rules").glob("*.smk"))
+        scripts = sorted(p.stem for p in (demo_project / "workflow" / "scripts").glob("*.py"))
         assert rules == sorted(DEMO_STAGES)
         assert scripts == sorted(DEMO_STAGES)
 
@@ -143,7 +157,7 @@ class TestProjectLayout:
 
     def test_snakefile_and_rules_tokenize(self, demo_project):
         """Snakemake syntax is Python-tokenizable; this catches broken literals without Snakemake."""
-        for path in [demo_project / "Snakefile", *(demo_project / "rules").glob("*.smk")]:
+        for path in [demo_project / "workflow" / "Snakefile", *(demo_project / "workflow" / "rules").glob("*.smk")]:
             _tokens(path)
 
     def test_all_yaml_parses(self, demo_project):
@@ -156,33 +170,33 @@ class TestProjectLayout:
 
 class TestConventions:
     def test_every_rule_touches_a_done_sentinel(self, demo_project):
-        for smk in (demo_project / "rules").glob("*.smk"):
+        for smk in (demo_project / "workflow" / "rules").glob("*.smk"):
             text = smk.read_text()
             assert re.search(r'done=touch\(f"\{OUT\}/done/' + smk.stem + r"_", text), smk.name
 
     def test_rules_use_sys_executable_not_bare_python(self, demo_project):
-        snakefile = (demo_project / "Snakefile").read_text()
+        snakefile = (demo_project / "workflow" / "Snakefile").read_text()
         assert "PYTHON = sys.executable" in snakefile
-        for smk in (demo_project / "rules").glob("*.smk"):
+        for smk in (demo_project / "workflow" / "rules").glob("*.smk"):
             text = smk.read_text()
-            assert "'{PYTHON:q} scripts/" in text
+            assert "'{PYTHON:q} {SCRIPTS:q}/" in text
             assert "'python " not in text and '"python ' not in text
 
     def test_downstream_stage_depends_on_upstream_sentinel(self, demo_project):
-        text = (demo_project / "rules" / "filter_maf.smk").read_text()
+        text = (demo_project / "workflow" / "rules" / "filter_maf.smk").read_text()
         assert 'f"{OUT}/done/format_sumstats_{{dataset}}.done"' in text
 
     def test_rule_all_targets_last_stage(self, demo_project):
-        text = (demo_project / "Snakefile").read_text()
+        text = (demo_project / "workflow" / "Snakefile").read_text()
         assert 'f"{OUT}/done/filter_pvalue_{n}.done" for n in TARGETS' in text
 
     def test_wildcard_constraint_is_closed_set(self, demo_project):
-        text = (demo_project / "Snakefile").read_text()
+        text = (demo_project / "workflow" / "Snakefile").read_text()
         assert "wildcard_constraints:" in text
         assert 'dataset="|".join(re.escape(' in text
 
     def test_scripts_do_not_import_snakemake(self, demo_project):
-        for py in (demo_project / "scripts").rglob("*.py"):
+        for py in (demo_project / "workflow" / "scripts").rglob("*.py"):
             text = py.read_text()
             assert "import snakemake" not in text
             assert "snakemake." not in text
@@ -191,7 +205,7 @@ class TestConventions:
         analysis = yaml.safe_load((demo_project / "config" / "analysis.yaml").read_text())
         assert analysis["filter_maf"] == {"maf": 0.01}
         assert analysis["filter_pvalue"] == {"p_threshold": 5e-08}
-        smk = (demo_project / "rules" / "filter_maf.smk").read_text()
+        smk = (demo_project / "workflow" / "rules" / "filter_maf.smk").read_text()
         assert '_item_analysis(wc.dataset, "filter_maf")["maf"]' in smk
         assert "--maf {params.maf:q}" in smk
 
@@ -267,7 +281,7 @@ class TestStageScripts:
         result = subprocess.run(
             [
                 sys.executable,
-                str(demo_project / "scripts" / "filter_maf.py"),
+                str(demo_project / "workflow" / "scripts" / "filter_maf.py"),
                 "--input", str(src),
                 "--out", str(out),
                 "--summary-json", str(summary),
@@ -284,7 +298,7 @@ class TestStageScripts:
         assert s["params"] == {"maf": 0.01}
 
     def test_stub_has_docstring_example(self, demo_project):
-        text = (demo_project / "scripts" / "filter_pvalue.py").read_text()
+        text = (demo_project / "workflow" / "scripts" / "filter_pvalue.py").read_text()
         assert "Example:" in text
         assert "--p-threshold" in text
 
@@ -335,7 +349,7 @@ class TestSpecValidation:
         assert result.returncode == 0, result.stderr
         proj = tmp_path / "out" / "rna"
         assert "samples" in yaml.safe_load((proj / "config" / "data.yaml").read_text())
-        assert "{{sample}}" in (proj / "rules" / "count.smk").read_text()
+        assert "{{sample}}" in (proj / "workflow" / "rules" / "count.smk").read_text()
 
     def test_refuses_non_empty_project_dir(self, tmp_path):
         out = tmp_path / "out"
@@ -352,7 +366,7 @@ class TestSpecValidation:
         (out / DEMO_PROJECT / "keep.txt").write_text("user file")
         result = run_cli(["--demo", "--output", str(out), "--force"])
         assert result.returncode == 0, result.stderr
-        assert (out / DEMO_PROJECT / "Snakefile").exists()
+        assert (out / DEMO_PROJECT / "workflow" / "Snakefile").exists()
         assert (out / DEMO_PROJECT / "keep.txt").exists()
 
     def test_quick_mode_from_flags(self, tmp_path):
@@ -360,7 +374,7 @@ class TestSpecValidation:
             ["--name", "quick", "--stages", "align,count,report", "--output", str(tmp_path)]
         )
         assert result.returncode == 0, result.stderr
-        rules = sorted(p.stem for p in (tmp_path / "quick" / "rules").glob("*.smk"))
+        rules = sorted(p.stem for p in (tmp_path / "quick" / "workflow" / "rules").glob("*.smk"))
         assert rules == ["align", "count", "report"]
 
     def test_no_input_and_no_demo_errors(self, tmp_path):
@@ -417,7 +431,7 @@ def _pwned(root: Path) -> list[Path]:
 class TestHostileSpec:
     def test_generated_sources_keep_spec_text_inert(self, tmp_path):
         proj = _scaffold(tmp_path, _hostile_spec())
-        sources = [proj / "Snakefile", *proj.glob("rules/*.smk"), *proj.rglob("*.py")]
+        sources = [proj / "workflow" / "Snakefile", *proj.glob("workflow/rules/*.smk"), *proj.rglob("*.py")]
         assert len(sources) >= 6
         for path in sources:
             for tok in _tokens(path):
@@ -429,7 +443,7 @@ class TestHostileSpec:
 
     def test_stage_scripts_help_runs_without_side_effects(self, tmp_path):
         proj = _scaffold(tmp_path, _hostile_spec())
-        for script in proj.glob("scripts/*.py"):
+        for script in proj.glob("workflow/scripts/*.py"):
             r = subprocess.run([sys.executable, str(script), "--help"], cwd=proj, capture_output=True, text=True)
             assert r.returncode == 0, r.stderr
         assert _pwned(tmp_path) == []
@@ -476,7 +490,7 @@ class TestHostileSpec:
 
     def test_shell_arguments_use_snakemake_quoting(self, tmp_path):
         proj = _scaffold(tmp_path, _hostile_spec())
-        text = (proj / "rules" / "first.smk").read_text(encoding="utf-8")
+        text = (proj / "workflow" / "rules" / "first.smk").read_text(encoding="utf-8")
         for field in ("{input.data:q}", "{output.result:q}", "{output.summary:q}", "{params.txt:q}",
                       "{params.trail:q}", "{params.n:q}", "{log:q}"):
             assert field in text, field
@@ -630,6 +644,29 @@ class TestSnakemakeIntegration:
         assert first["params"]["trail"] == "ends with backslash \\"
         second = json.loads((proj / "results" / "second" / "a.summary.json").read_text())
         assert second["params"]["odd"] == odd
+
+    def test_runs_from_a_path_with_spaces(self, demo_project, tmp_path):
+        proj = tmp_path / "dir with spaces" / "proj"
+        shutil.copytree(demo_project, proj)
+        result = subprocess.run(
+            [sys.executable, "-m", "snakemake", "--cores", "1", "--drop-metadata"],
+            cwd=proj, capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (proj / "results" / "done" / f"{DEMO_STAGES[-1]}_cohort_a.done").exists()
+
+    def test_runs_with_a_separate_working_directory(self, demo_project, tmp_path):
+        """snakemake -s workflow/Snakefile -d <run dir>: config and scripts still resolve."""
+        proj = tmp_path / "proj"
+        shutil.copytree(demo_project, proj)
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        result = subprocess.run(
+            [sys.executable, "-m", "snakemake", "--cores", "1", "--drop-metadata",
+             "-s", str(proj / "workflow" / "Snakefile"), "-d", str(run_dir)],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
 
     def test_check_flag_records_dry_run(self, tmp_path):
         result = run_cli(["--demo", "--output", str(tmp_path), "--check"])
