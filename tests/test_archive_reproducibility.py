@@ -18,20 +18,33 @@ import pytest
 from tests.test_archive_command_coverage import SKILLS, _load_entry_point
 
 
+def _demo_app(skill: str, monkeypatch):
+    """Load a skill's entry point for an in-process --demo run.
+
+    --demo swaps the client's `http_get` for a fixture reader and never puts it
+    back, which is fine when each run is its own process. Registering the
+    attribute with monkeypatch makes pytest restore the real client at teardown,
+    so a later test that patches urlopen still reaches it.
+    """
+    app = _load_entry_point(skill)
+    monkeypatch.setattr(app.api, "http_get", app.api.http_get)
+    return app
+
+
 def _recorded_argv(output_dir: Path) -> list[str]:
     line = (output_dir / "reproducibility" / "commands.sh").read_text().splitlines()[1]
     return shlex.split(line)[2:]  # drop `python <script>`
 
 
 @pytest.mark.parametrize("skill", SKILLS)
-def test_demo_run_is_recorded_as_a_demo_run(skill, tmp_path):
-    app = _load_entry_point(skill)
+def test_demo_run_is_recorded_as_a_demo_run(skill, tmp_path, monkeypatch):
+    app = _demo_app(skill, monkeypatch)
     app.main(["--demo", "--output", str(tmp_path)])
     assert _recorded_argv(tmp_path) == ["--demo", "--output", str(tmp_path)]
 
 
-def test_every_flag_of_a_command_run_is_recorded(tmp_path):
-    app = _load_entry_point("ena-fetch")
+def test_every_flag_of_a_command_run_is_recorded(tmp_path, monkeypatch):
+    app = _demo_app("ena-fetch", monkeypatch)
     argv = ["--demo", "--command", "samplesheet", "--assay", "bulk",
             "--fastq-dir", "/data/fastq", "--output", str(tmp_path)]
     app.main(argv)
@@ -39,8 +52,8 @@ def test_every_flag_of_a_command_run_is_recorded(tmp_path):
 
 
 @pytest.mark.parametrize("skill", SKILLS)
-def test_replaying_commands_sh_reproduces_the_report(skill, tmp_path):
-    app = _load_entry_point(skill)
+def test_replaying_commands_sh_reproduces_the_report(skill, tmp_path, monkeypatch):
+    app = _demo_app(skill, monkeypatch)
     app.main(["--demo", "--output", str(tmp_path)])
     original = (tmp_path / "report.md").read_text()
     (tmp_path / "report.md").unlink()
