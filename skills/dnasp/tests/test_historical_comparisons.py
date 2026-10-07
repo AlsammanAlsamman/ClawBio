@@ -108,7 +108,6 @@ def value_for(row):
 
 # Rows whose recorded DnaSP figure differs from the skill's, with the reason.
 DIVERGENT = {
-    ('A', 'Variance of Hd'): 'last displayed digit',
     ('C', 'ω = Ka/Ks'): 'DnaSP divides its two rounded 5-dp values (0.02561/0.83011)',
     ('C', 'Nonsynonymous sites (mean)'): 'last displayed digit (681 - 168.222 = 512.778)',
     ('H1', 'Fu & Li F*'): "DnaSP's multi-alignment output uses the Achaz (2009) variance; "
