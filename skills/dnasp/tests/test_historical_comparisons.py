@@ -4,7 +4,7 @@ Two checks per row, both against recorded values rather than a new GUI run:
 - test_recorded_python_value pins the skill's value recorded in S1 (a regression
   check of this code, not evidence of agreement with DnaSP);
 - test_value_agrees_with_dnasp checks the current value against DnaSP's own
-  printed figure at DnaSP's printed precision, except for the seven rows in
+  printed figure at DnaSP's printed precision, except for the six rows in
   DIVERGENT, whose recorded difference from DnaSP is documented there.
 """
 from pathlib import Path
