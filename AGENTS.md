@@ -321,23 +321,3 @@ Before improvising a common workflow, check `commands/` for reusable slash comma
 | `/new-skill` | Scaffold a new skill from the official template |
 | `/list-skills` | List available skills from `skills/catalog.json` |
 | `/run-demo` | Run a skill demo with built-in sample data |
-
-## Key Files Reference
-
-| File | Purpose |
-|------|---------|
-| `AGENTS.md` | This file: routing method, development rules, and safety boundaries |
-| `clawbio/cli.py` | CLI runner, SKILLS dict, security filtering, profile management (`clawbio.py` is the entry point) |
-| `skills/catalog.json` | **Single source of truth** for skills: triggers, aliases, demo commands (auto-generated) |
-| `commands/` | Slash commands for analysis, skill scaffolding, skill listing, and demos |
-| `llms.txt` | Token-optimized project summary and LLM entry point |
-| `CONTRIBUTING.md` | Human contributor guide and wanted skills list |
-| `templates/SKILL-TEMPLATE.md` | Canonical template for creating new skills |
-| `commands/` | Slash command definitions such as `/analyse`, `/new-skill`, `/list-skills`, `/run-demo` |
-| `scripts/generate_catalog.py` | Auto-generates `skills/catalog.json` from skill metadata |
-| `scripts/nightly_demo_sweep.py` | Nightly demo and benchmark sweep across skills |
-| `tests/benchmark/mock_api_server.py` | Deterministic mock API server for offline CI and local testing |
-| `tests/benchmark/benchmark_scorer.py` | Benchmark scoring CLI and Python API |
-| `pyproject.toml` | Dependencies and optional extras (`uv sync`; pinned by `uv.lock`) |
-| `pytest.ini` | Test configuration (`skills/*/tests` collected by glob) |
-| `Makefile` | `make test`, `make demo`, `make list` |
