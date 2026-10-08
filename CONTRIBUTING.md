@@ -69,6 +69,11 @@ If the skill includes tests, run:
 python -m pytest skills/your-skill-name/tests/ -v
 ```
 
+If the skill computes scores, applies thresholds, parses files or converts
+coordinates, include at least one Hypothesis property test. See
+[Property-based tests for maths and parsing](AGENTS.md#property-based-tests-for-maths-and-parsing)
+in `AGENTS.md`.
+
 If you changed `SKILL.md` YAML frontmatter, regenerate the catalog:
 
 ```bash
