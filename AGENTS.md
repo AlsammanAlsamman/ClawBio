@@ -309,7 +309,8 @@ These are non-negotiable constraints:
 2. **Disclaimer required**: Every report must include: *"ClawBio is a research and educational tool. It is not a medical device and does not provide clinical diagnoses. Consult a healthcare professional before making any medical decisions."*
 3. **No hallucinated science**: Gene-drug associations, thresholds, and parameters must trace back to SKILL.md methodology or cited databases (CPIC, PharmGKB, ClinVar, etc.). Never invent bioinformatics values.
 4. **Security filtering**: `clawbio.py` enforces per-skill `allowed_extra_flags` whitelists (INT-001). Do not bypass this.
-5. **Warn before overwriting**: Check for existing output before writing to a directory.
+5. **Ask before destructive actions**: Check for existing output before writing to a directory. Ask before deleting data, force-pushing, or editing files outside this repository other than skill output directories.
+6. **Mark what you could not confirm**: In reports, PR descriptions and summaries, flag any claim you did not verify and say where you looked.
 
 ## Slash Commands
 
